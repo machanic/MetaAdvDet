@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=0 python3 -u main.py --num_classes=5 --meta_batch_size=5 --meta_lr=0.001 --num_support=1 --num_query=15 --num_updates=1 --num_train_tasks=2000 --l2_alpha=0.00001 --l1_alpha=0.00001 --dropout_rate=0.2 --network=resnet --base_num_filters=64 --test_num_updates=10 > logs/minioulu1shot/logging1.log

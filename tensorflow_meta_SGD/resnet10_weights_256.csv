@@ -1,0 +1,49 @@
+resnet/0/block2_b/bn/gamma,[16]
+resnet/1/block2_b/bn/beta,[32]
+resnet/0/sht/conv2d/kernel,"[1, 1, 16, 16]"
+resnet/2/block2_a/bn/moving_mean,[32]
+resnet/1/block2_a/conv2d/kernel,"[3, 3, 16, 32]"
+resnet/bn/moving_mean,[128]
+resnet/0/block2_b/bn/beta,[16]
+resnet/1/block2_a/bn/gamma,[16]
+resnet/0/block2_b/bn/moving_variance,[16]
+resnet/2/block2_b/bn/beta,[64]
+resnet/1/sht/conv2d/kernel,"[1, 1, 16, 32]"
+resnet/3/block2_a/bn/moving_mean,[64]
+resnet/1/block2_a/bn/moving_variance,[16]
+resnet/3/sht/conv2d/kernel,"[1, 1, 64, 128]"
+resnet/2/block2_a/bn/gamma,[32]
+resnet/3/block2_a/bn/beta,[64]
+resnet/3/block2_b/bn/moving_variance,[128]
+resnet/3/block2_b/conv2d/kernel,"[3, 3, 128, 128]"
+resnet/2/block2_b/bn/gamma,[64]
+resnet/0/block2_a/bn/moving_variance,[16]
+resnet/0/block2_a/bn/gamma,[16]
+resnet/3/block2_a/bn/moving_variance,[64]
+resnet/2/block2_a/conv2d/kernel,"[3, 3, 32, 64]"
+resnet/0/block2_b/bn/moving_mean,[16]
+resnet/2/sht/conv2d/kernel,"[1, 1, 32, 64]"
+resnet/3/block2_b/bn/moving_mean,[128]
+resnet/3/block2_b/bn/gamma,[128]
+resnet/2/block2_a/bn/moving_variance,[32]
+resnet/bn/beta,[128]
+resnet/bn/gamma,[128]
+resnet/0/block2_a/bn/beta,[16]
+resnet/bn/moving_variance,[128]
+resnet/2/block2_b/bn/moving_mean,[64]
+resnet/0/block2_b/conv2d/kernel,"[3, 3, 16, 16]"
+resnet/0/block2_a/bn/moving_mean,[16]
+resnet/2/block2_b/bn/moving_variance,[64]
+resnet/1/block2_b/bn/gamma,[32]
+resnet/1/block2_b/bn/moving_mean,[32]
+resnet/3/block2_a/bn/gamma,[64]
+resnet/1/block2_b/conv2d/kernel,"[3, 3, 32, 32]"
+resnet/1/block2_a/bn/beta,[16]
+resnet/3/block2_b/bn/beta,[128]
+resnet/2/block2_a/bn/beta,[32]
+resnet/conv2d/kernel,"[7, 7, 3, 16]"
+resnet/1/block2_a/bn/moving_mean,[16]
+resnet/1/block2_b/bn/moving_variance,[32]
+resnet/0/block2_a/conv2d/kernel,"[3, 3, 16, 16]"
+resnet/3/block2_a/conv2d/kernel,"[3, 3, 64, 128]"
+resnet/2/block2_b/conv2d/kernel,"[3, 3, 64, 64]"
