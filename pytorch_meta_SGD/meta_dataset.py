@@ -6,13 +6,14 @@ from tensorflow_meta_SGD.utils import get_image_paths, get_images_specify
 import torch
 import numpy as np
 
+# meta learning 总体套路: 一个batch分为n个task，每个task又分为5-way,每个way分为support和query
 class NpyDataset(data.Dataset):
     """
     Data Generator capable of generating batches of data.
     A "class" is considered a class of omniglot digits or a particular sinusoid function.
     """
 
-    def __init__(self, num_samples_per_class, batch_size, args, dataset, train):
+    def __init__(self, num_samples_per_class, batch_size, args, dataset, is_train):
         """
         Args:
             num_samples_per_class: num samples to generate "per class" in one batch
@@ -20,13 +21,12 @@ class NpyDataset(data.Dataset):
         """
         self.batch_size = batch_size
         self.num_samples_per_class = num_samples_per_class
-        self.num_classes =  args.num_classes  # e.g. 5-way
+        self.num_classes = args.num_classes  # e.g. 5-way
         self.img_size = IMAGE_SIZE[dataset]
         self.dim_input = np.prod(self.img_size) * 3
         self.dim_output = self.num_classes
         self.args = args
-        self.train = train
-
+        self.train = is_train  # 区分训练集和测试集
 
         metatrain_folder = DATA_ROOT + '/train'
         metaval_folder = DATA_ROOT + "/test"
@@ -34,19 +34,14 @@ class NpyDataset(data.Dataset):
         metatrain_folders = [os.path.join(metatrain_folder, label) \
                              for label in os.listdir(metatrain_folder) \
                              if os.path.isdir(os.path.join(metatrain_folder, label))]
-
-        # get the positive and negative folder if num_classes is 2
-        if args.p_n:
-            self.metatrain_folders_p = [folder for folder in metatrain_folders if folder.endswith('_1')]  # 1 表示干净真实图片
-            self.metatrain_folders_n = [folder for folder in metatrain_folders if not folder.endswith('_1')]
-
         metaval_folders = [os.path.join(metaval_folder, label) \
                            for label in os.listdir(metaval_folder) \
                            if os.path.isdir(os.path.join(metaval_folder, label))]
         # get the positive and negative folder if num_classes is 2
-        if args.p_n:
-            self.metaval_folders_p = [folder for folder in metaval_folders if folder.endswith('_1')]  # 真实图片
-            self.metaval_folders_n = [folder for folder in metaval_folders if not folder.endswith('_1')]
+        self.metatrain_folders_p = [folder for folder in metatrain_folders if folder.endswith('_1')]  # 1 表示干净真实图片
+        self.metatrain_folders_n = [folder for folder in metatrain_folders if not folder.endswith('_1')]
+        self.metaval_folders_p = [folder for folder in metaval_folders if folder.endswith('_1')]  # 真实图片
+        self.metaval_folders_n = [folder for folder in metaval_folders if not folder.endswith('_1')]
 
         self.metatrain_folders = metatrain_folders
         self.metaval_folders = metaval_folders
@@ -54,10 +49,10 @@ class NpyDataset(data.Dataset):
         self.num_total_train_batches = args.tot_num_tasks
         self.num_total_val_batches = 720
 
-        if args.train:
+        if is_train:
             self.store_data_per_task(train=True, random_sample=True)
-
-        self.store_data_per_task(train=False, random_sample=False)
+        else:
+            self.store_data_per_task(train=False, random_sample=False)
 
     def store_data_per_task(self, train=True, random_sample=True):
         if train:
@@ -104,9 +99,8 @@ class NpyDataset(data.Dataset):
             data_class_task = Files_per_task(labels_and_image_paths, i, positive_label)  # 第i个task的5-way的所有数据
             tasks_data_classes.append(data_class_task)
 
-
-    def __getitem__(self, task_index, train=True):
-        if train:
+    def __getitem__(self, task_index):
+        if self.train:
             task_class = self.train_tasks_data_classes[task_index]  #取出该task的5-way的所有数据
         else:
             task_class = self.val_tasks_data_classes[task_index]
@@ -120,7 +114,7 @@ class NpyDataset(data.Dataset):
             # num_samples_per_class 是一个batch的一个way的samples总量
             if i % self.num_samples_per_class < self.args.num_support:   # num_support support集中收集每个way取出多少个shot
                 train_files.append(labels_and_image_paths[i])
-            else:
+            else: # 剩余的给test_files
                 test_files.append(labels_and_image_paths[i])
 
         random.shuffle(train_files)
@@ -205,7 +199,7 @@ class NpyDataset(data.Dataset):
         meta_test_ims = torch.cat(test_ims, dim=0)
         meta_test_lbls = torch.cat(test_lbls, dim=0)
         meta_positive_labels = torch.cat(positive_labels, dim=0)
-        return meta_train_ims, meta_train_lbls, meta_test_ims, meta_test_lbls,meta_positive_labels
+        return meta_train_ims, meta_train_lbls, meta_test_ims, meta_test_lbls, meta_positive_labels
 
 
 

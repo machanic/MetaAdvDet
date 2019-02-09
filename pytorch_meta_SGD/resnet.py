@@ -9,6 +9,8 @@ model_urls = {
     'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
 }
 
+
+
 class MetaResNet(nn.Module):
     def __init__(self, img_size, args):
         super(MetaResNet, self).__init__()
@@ -108,31 +110,22 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, block, layers,num_filters=64,  num_classes=15, final_size=64, dropout_ratio=0.9, zero_init_residual=False):
+    def __init__(self, block, layers, num_classes=15,  zero_init_residual=False):
         super(ResNet, self).__init__()
         self.inplanes = 64
-        self.conv1 = nn.Conv2d(3, num_filters, kernel_size=7, stride=2, padding=3,
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
                                bias=False)
-        self.bn1 = nn.BatchNorm2d(num_filters)
+        self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        _num_filters = num_filters * (2 ** 0)
-        self.layer1 = self._make_layer(block, _num_filters, layers[0])
-        _num_filters = num_filters * (2 ** 1)
-        self.layer2 = self._make_layer(block, _num_filters, layers[1], stride=2)
-        _num_filters = num_filters * (2 ** 2)
-        self.layer3 = self._make_layer(block, _num_filters, layers[2], stride=2)
-
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
         if len(layers) > 3:
-            _num_filters = num_filters * (2 ** 3)
-            self.layer4 = self._make_layer(block, _num_filters, layers[3], stride=2)
+            self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.dropout_ratio = dropout_ratio
-        if dropout_ratio > 0:
-            self.dropout = nn.Dropout(p=dropout_ratio)
-        self.final_size = final_size
-        self.fc = nn.Linear(final_size, num_classes, bias=True)
+        self.fc = nn.Linear(512 * block.expansion, num_classes)
 
         # self.fc = nn.Linear(512 * block.expansion, num_classes)
         for m in self.modules():
@@ -181,9 +174,7 @@ class ResNet(nn.Module):
             x = self.layer4(x)
 
         x = self.avgpool(x)
-        x = x.view(-1, self.final_size)
-        if self.dropout_ratio > 0:
-            x = self.dropout(x)
+        x = x.view(x.size(0), -1)
         x = self.fc(x)
 
         return x
@@ -203,13 +194,13 @@ def resnet8(**kwards):
     model = ResNet(BasicBlock, [1,1,1], **kwards)
     return model
 
-def resnet10( num_filters, num_classes, final_size, **kwards):
+def resnet10(num_classes, **kwards):
     """
     Construct a ResNet-10 model
     :param kwards:
     """
     model = ResNet(BasicBlock, [1,1,1,1],
-                   num_filters=num_filters,final_size=final_size, num_classes=num_classes)
+                num_classes=num_classes)
     return model
 
 
