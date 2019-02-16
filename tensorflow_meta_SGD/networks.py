@@ -29,7 +29,7 @@ class ResNet(object):
         conv_initializer = tf.contrib.layers.xavier_initializer_conv2d(dtype=dtype)
         fc_initializer = tf.contrib.layers.xavier_initializer(dtype=dtype)
 
-        csv_name = 'resnet' + str(self.resnet_size) + '_weights_256.csv'
+        csv_name = 'tensorflow_meta_SGD/' + 'resnet' + str(self.resnet_size) + '_weights_256.csv'
         with open(csv_name, "r") as csvfile:
             reader = csv.reader(csvfile)  # 读取csv文件，返回的是迭代类型
             for item in reader:
@@ -102,7 +102,7 @@ class ResNet(object):
         fc_initializer = tf.contrib.layers.xavier_initializer(dtype=dtype)
 
         alpha_weight = {}
-        csv_name = 'resnet' + str(self.resnet_size) + '_weights_256.csv'
+        csv_name = 'tensorflow_meta_SGD/' + 'resnet' + str(self.resnet_size) + '_weights_256.csv'
         with open(csv_name, "r") as csvfile:
             reader = csv.reader(csvfile)
             for item in reader:

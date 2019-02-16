@@ -58,10 +58,12 @@ def parse_args():
     return FLAGS
 
 def train(FLAGS, model, saver, sess, exp_string, data_generator, resume_itr=0):
+    # SUMMARY_INTERVAL = 100
+    # PRINT_INTERVAL = 50
+    # TEST_PRINT_INTERVAL = 50
     SUMMARY_INTERVAL = 100
-    PRINT_INTERVAL = 50
-    TEST_PRINT_INTERVAL = 50
-
+    PRINT_INTERVAL = 100
+    TEST_PRINT_INTERVAL = 10000
     if FLAGS.log:
         train_writer = tf.summary.FileWriter(FLAGS.logdir + '/' + exp_string, sess.graph)
     print('Done initializing, starting training.')
@@ -93,7 +95,7 @@ def train(FLAGS, model, saver, sess, exp_string, data_generator, resume_itr=0):
         meta_test_lbls = meta_test_lbls.astype(np.float32)
         feed_dict[model.labela] = meta_train_lbls
         feed_dict[model.labelb] = meta_test_lbls
-        feed_dict[model.positive_labels] = meta_positive_labels
+        feed_dict[model.positive_labels] = meta_positive_labels  # 可见这里拿到的是train数据集的positive label
 
         input_tensors = [model.metatrain_op]
 

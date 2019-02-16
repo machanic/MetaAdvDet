@@ -14,20 +14,25 @@ from tensorflow.python.platform import flags
 from tensorflow_meta_SGD.utils import xent
 from tensorflow_meta_SGD.networks import ResNet
 from config import Stage
-
+from sklearn.metrics import accuracy_score
 FLAGS = flags.FLAGS
-
 def Nway_2way(predicts, Nway_labels, twoway_label):
-    positive_acc_counter = 0
-    negetive_acc_counter = 0
-    for i, predict in enumerate(predicts):
-        if twoway_label == Nway_labels[i] and predict == twoway_label:
-            positive_acc_counter += 1
-        elif predict != twoway_label:
-            negetive_acc_counter += 1
-    acc = float(positive_acc_counter + negetive_acc_counter) / len(predicts)
-    acc = np.float32(acc)
-    return acc
+    # convert to two way
+    predicts = (predicts == twoway_label).astype(np.int32)
+    Nway_labels = (Nway_labels == twoway_label).astype(np.int32)
+    return np.float32(accuracy_score(Nway_labels, predicts))
+
+# def Nway_2way(predicts, Nway_labels, twoway_label):
+#     positive_acc_counter = 0
+#     negetive_acc_counter = 0
+#     for i, predict in enumerate(predicts):
+#         if twoway_label == Nway_labels[i] and predict == twoway_label:
+#             positive_acc_counter += 1
+#         elif predict != twoway_label:
+#             negetive_acc_counter += 1
+#     acc = float(positive_acc_counter + negetive_acc_counter) / len(predicts)
+#     acc = np.float32(acc)
+#     return acc
 
 class MAML:
     def __init__(self, dim_input=1, dim_output=1):
@@ -49,10 +54,6 @@ class MAML:
 
         self.loss_func = xent
         self.classification = True
-
-
-
-
         shape = [FLAGS.meta_batch_size, FLAGS.num_support * FLAGS.num_classes, self.img_size * self.img_size * 3]
         self.inputa = tf.placeholder(tf.float32, shape=shape)  # train数据
         shape = [FLAGS.meta_batch_size, FLAGS.num_query * FLAGS.num_classes, self.img_size * self.img_size * 3]

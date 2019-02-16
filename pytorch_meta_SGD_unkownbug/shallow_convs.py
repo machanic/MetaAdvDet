@@ -17,7 +17,7 @@ class FourConvs(nn.Module):
     The architecture is same as of the embedding in MatchingNet.
     """
 
-    def __init__(self, in_channels, num_classes):
+    def __init__(self, in_channels, img_size, num_classes):
         """
         self.net returns:
             [N, 64, 1, 1] for Omniglot (28x28)
@@ -32,12 +32,16 @@ class FourConvs(nn.Module):
                      difference of input size of 'Omniglot' and 'ImageNet'
         """
         super(FourConvs, self).__init__()
+        self.img_size = img_size
+        self.in_channels = in_channels
         self.features = nn.Sequential(
             conv_block(0, in_channels, padding=1, pooling=True),
             conv_block(1, N_FILTERS, padding=1, pooling=True),
             conv_block(2, N_FILTERS, padding=1, pooling=True),
             conv_block(3, N_FILTERS, padding=1, pooling=True))
-        self.add_module('fc', nn.Linear(64 * 5 * 5, num_classes))
+        self.add_module('fc',
+            nn.Linear(64 * (self.img_size[0] // 2 ** len(self.features)) *  (self.img_size[1] // 2 ** len(self.features)),
+                                        num_classes))
 
 
     def forward(self, X, params=None):
@@ -48,6 +52,7 @@ class FourConvs(nn.Module):
         Returns:
             out: [N, num_classes] unnormalized score for each class
         """
+        X = X.view(-1, self.in_channels, self.img_size[0], self.img_size[1])
         if params == None:
             out = self.features(X)
             out = out.view(out.size(0), -1)

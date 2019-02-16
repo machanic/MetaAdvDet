@@ -136,7 +136,6 @@ class NpyDataset(data.Dataset):
 
         task_train_ims = np.concatenate(image_list, axis=0)  # N, 3072
         task_train_lbls = np.array(label_list)
-        task_train_lbls = self.make_one_hot(task_train_lbls, self.num_classes)
 
         image_list = []
         label_list = []
@@ -153,7 +152,6 @@ class NpyDataset(data.Dataset):
             label_list.append(label)
         task_test_ims = np.concatenate(image_list, axis=0)  # N C H W
         task_test_lbls = np.array(label_list)
-        task_test_lbls = self.make_one_hot(task_test_lbls, self.num_classes)
 
         task_train_ims = torch.from_numpy(task_train_ims)
         task_train_lbls = torch.from_numpy(task_train_lbls)
@@ -170,8 +168,7 @@ class NpyDataset(data.Dataset):
             return self.num_total_val_batches
 
 
-    def make_one_hot(self, data, classes):
-        return (np.arange(classes) == data[:, None]).astype(np.integer)
+
 
     def get_data_n_tasks(self, meta_batch_size, train=True):
         if train:
@@ -187,7 +184,7 @@ class NpyDataset(data.Dataset):
         for task_index in task_indexes:
             # task_train_ims : N, 3072, where N changes over tasks
             task_train_ims, task_train_lbls, task_test_ims, task_test_lbls, task_positive_label = \
-                self.__getitem__(task_index, train)
+                self.__getitem__(task_index)
             train_ims.append(torch.unsqueeze(task_train_ims, 0))
             train_lbls.append(torch.unsqueeze(task_train_lbls, 0))
             test_ims.append(torch.unsqueeze(task_test_ims, 0))

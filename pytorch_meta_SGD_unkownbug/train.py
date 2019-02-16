@@ -3,18 +3,20 @@ sys.path.append("/home1/machen/adv_detection_meta_learning")
 import argparse
 import os
 import numpy as np
-from pytorch_meta_SGD.meta import MAML
-from pytorch_meta_SGD.shallow_convs import FourConvs
+from pytorch_meta_SGD_unkownbug.meta import MAML
+from pytorch_meta_SGD_unkownbug.shallow_convs import FourConvs
+from pytorch_meta_SGD_unkownbug.resnet import MetaResNet
 import torch
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
 import torch.utils.data.distributed
-from pytorch_meta_SGD.meta_dataset import NpyDataset
-from pytorch_meta_SGD.meta import Stage
-from pytorch_meta_SGD.tensorboard_writer import TensorBoardWriter
+from pytorch_meta_SGD_unkownbug.meta_dataset import NpyDataset
+from pytorch_meta_SGD_unkownbug.meta import Stage
+from pytorch_meta_SGD_unkownbug.tensorboard_writer import TensorBoardWriter
 import random
+from config import IMAGE_SIZE
 
 NUM_TEST_POINTS = 100
 
@@ -25,7 +27,7 @@ def parse_args():
     parser.add_argument('--num_classes', type=int, default=5, help='number of classes(ways) used in classification (e.g. 5-way classification).')
     parser.add_argument("--pretrain_iterations",type=int, default=0, help="number of pre-training iterations, only optimize support loss.")
     parser.add_argument("--metatrain_iterations",type=int, default=15000, help="number of metatraining iterations.")
-    parser.add_argument('--meta_batch_size', type=int, default=25, help='number of tasks sampled per meta-update') # 注意是task数量
+    parser.add_argument('--meta_batch_size', type=int, default=5, help='number of tasks sampled per meta-update') # 注意是task数量
     parser.add_argument('--meta_lr', type=float, default=0.001, help='the base learning rate')
     parser.add_argument('--num_support',type=int, default=1, help='number of examples used for inner gradient update (K for K-shot learning) in one way.')
     parser.add_argument('--num_query', type=int, default=15, help='number of examples of each class in query set in one way.')
@@ -36,7 +38,7 @@ def parse_args():
     parser.add_argument('--l1_alpha', type=float, default=0.00001, help='param of the l1_norm loss')
     parser.add_argument('--arch', type=str, default='resnet', choices=["resnet10", "conv4"],help='network name')  #10 层
     parser.add_argument('--test_num_updates', type=int, default=10, help='number of inner gradient updates during testing')
-    parser.add_argument('--lr_decay_itr', type=int, default=0, help='number of iteration that the meta lr should decay')
+    parser.add_argument('--lr_decay_itr', type=int, default=100000, help='number of iteration that the meta lr should decay')
     parser.add_argument('--p_n', action='store_true', help='whether to separate folders into positive and negative folders')
     parser.add_argument('--two', action='store_true', help='whether to calculate 2-way acc')  #测试的时候就是个二分类问题：真实/噪音
     parser.add_argument("--dataset", type=str, default="CIFAR-10", help="the dataset to train")
@@ -92,16 +94,17 @@ def main_worker(args):
     # Data loading code
     trn_dataset = NpyDataset(args.num_support+args.num_query, args.meta_batch_size, args, args.dataset, is_train=True)
     val_dataset = NpyDataset(args.num_support + args.num_query,args.meta_batch_size, args, args.dataset,is_train=False)
-    model = FourConvs(in_channels=3, num_classes=args.num_classes)
-    maml = MAML(model, trn_dataset.dim_input, args.num_classes, args.meta_lr, args.num_updates,
-                args.two, args.meta_batch_size, args.l2_alpha, args.l1_alpha, Stage.TRAIN_STAGE)
+    # network = FourConvs(in_channels=3, img_size=IMAGE_SIZE[args.dataset], num_classes=args.num_classes)
+    network = MetaResNet(img_size=IMAGE_SIZE[args.dataset], num_classes=args.num_classes)
+    for param in network.parameters():
+        param.requires_grad = False
+    maml = MAML(network, trn_dataset.dim_input, args.num_classes, args.num_updates,
+                args.two, args.meta_batch_size, args.l2_alpha, args.l1_alpha)
     if args.gpu is not None:
-        torch.cuda.set_device(args.gpu)
-        maml.cuda(args.gpu)
+        maml.cuda()
 
-    learning_params = list(maml.alpha.values()) + list(maml.weight.values())
-    optimizer = torch.optim.SGD(learning_params, args.meta_lr,
-                                momentum=0.9,
+    # learning_params = list(maml.alpha.values()) + list(maml.weight.values())
+    optimizer = torch.optim.Adam(maml.parameters(), args.meta_lr,
                                 weight_decay=1e-4)
     # optionally resume from a checkpoint
     resume_epoch = 0
@@ -110,7 +113,6 @@ def main_worker(args):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
             resume_epoch = checkpoint['resume_epoch']
-            best_acc1 = checkpoint['best_acc1']
             maml.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
@@ -119,14 +121,14 @@ def main_worker(args):
             print("=> no checkpoint found at '{}'".format(args.resume))
 
     train_loader = torch.utils.data.DataLoader(
-        trn_dataset, batch_size=args.meta_batch_size, shuffle=True,
+        trn_dataset, batch_size=args.meta_batch_size, shuffle=False,
         num_workers=0, pin_memory=True)
 
     prelosses, postlosses = [], []
     epoches = (args.pretrain_iterations + args.metatrain_iterations) // len(train_loader)
     for epoch in range(resume_epoch, epoches):
         # 调节learning rate
-        exp_string = str(args.network) + str(args.attention) + '_cls_' + str(args.num_classes) + '.mbs_' + str(args.meta_batch_size)
+        exp_string = str(args.arch) + '_cls_' + str(args.num_classes) + '.mbs_' + str(args.meta_batch_size)
         exp_string += '.nstep_' + str(args.num_updates) + '.tnstep_' + str(args.test_num_updates)
         exp_string += '.ubs_' + str(args.num_support) + '.nts_' + str(args.tot_num_tasks)
         exp_string += '.l1_' + str(args.l1_alpha) + '.l2_' + str(args.l2_alpha)
@@ -144,8 +146,7 @@ def main_worker(args):
         torch.save({
             'epoch': epoch + 1,
             'arch': args.arch,
-            'state_dict': model.state_dict(),
-            'best_acc1': best_acc1,
+            'state_dict': maml.state_dict(),
             'optimizer': optimizer.state_dict(),
             'val_means': means,
         }, "{}_meta_SGD.pth.tar".format(args.arch))
@@ -155,8 +156,8 @@ def main_worker(args):
 
 def train(train_loader, val_dataset, model, optimizer, epoch, args, exp_string, prelosses, postlosses):
     SUMMARY_INTERVAL = 100
-    PRINT_INTERVAL = 50
-    TEST_PRINT_INTERVAL = 50
+    PRINT_INTERVAL = 100
+    TEST_PRINT_INTERVAL = 5000
     if args.log:
         train_writer = TensorBoardWriter(args.logdir + "/" + exp_string)
     print('Done initializing, starting training.')
@@ -167,11 +168,11 @@ def train(train_loader, val_dataset, model, optimizer, epoch, args, exp_string, 
     for i, (meta_train_ims, meta_train_lbls, meta_test_ims, meta_test_lbls, meta_positive_labels) in enumerate(train_loader):
         itr = epoch * len(train_loader) + i
         adjust_learning_rate(optimizer, itr, args)
-        meta_train_ims = meta_train_ims.cuda(args.gpu)
-        meta_train_lbls = meta_train_lbls.cuda(args.gpu)
-        meta_test_ims = meta_test_ims.cuda(args.gpu)
-        meta_test_lbls = meta_test_lbls.cuda(args.gpu)
-        meta_positive_labels = meta_positive_labels.cuda(args.gpu)
+        meta_train_ims = meta_train_ims.cuda()
+        meta_train_lbls = meta_train_lbls.cuda()
+        meta_test_ims = meta_test_ims.cuda()
+        meta_test_lbls = meta_test_lbls.cuda()
+        meta_positive_labels = meta_positive_labels.cuda()  # 该positive指的是train数据集的postive
         # measure data loading time
         # compute output
         total_loss_support, total_loss_query, loss, total_accuracy_support, total_accuracy_query,\
@@ -183,14 +184,14 @@ def train(train_loader, val_dataset, model, optimizer, epoch, args, exp_string, 
         losses.update(loss.item(), meta_train_ims.size(0))
         # compute gradient and do SGD step
         optimizer.zero_grad()
-        if itr < args.pretrain_iterations:
-            total_loss_support.backward()
-        else:
-            loss.backward()
+        # if itr < args.pretrain_iterations:
+        #     total_loss_support.backward()
+        # else:
+        loss.backward()
         optimizer.step()
         if itr % SUMMARY_INTERVAL == 0:
             prelosses.append(total_loss_support.detach().cpu().numpy())
-            postlosses.append(total_loss_query.detach().cpu().numpy()[args.num_updates - 1])
+            postlosses.append(total_loss_query[args.num_updates - 1].detach().cpu().numpy())
 
         if (itr!=0) and itr % PRINT_INTERVAL == 0:
             if itr < args.pretrain_iterations:
@@ -199,9 +200,9 @@ def train(train_loader, val_dataset, model, optimizer, epoch, args, exp_string, 
                 print_str =  'Iteration ' + str(itr - args.pretrain_iterations)
             print_str += ': pre_loss:' + str(np.mean(prelosses)) + ', post_loss:' + str(np.mean(postlosses))
             print_str += ': support_acc:' + str(np.mean(total_accuracy_support.detach().cpu().numpy())) \
-                         + ', query_acc: ' + str(np.mean(total_accuracy_query.detach().cpu().numpy()))
+                         + ', query_acc: ' + str(torch.mean(torch.stack(total_accuracy_query)).detach().cpu().numpy())
             if args.two:
-                print_str += ', two_way_acc:' + str(np.mean(total_accuracy_two_way))
+                print_str += ', two_way_acc:' + str(torch.mean(torch.stack(total_accuracy_two_way)).detach().cpu().numpy())
             print('Epoch: [{0}][{1}/{2}]\t'.format(epoch, i, len(train_loader)) + print_str)
             prelosses.clear()
             postlosses.clear()
@@ -212,34 +213,40 @@ def train(train_loader, val_dataset, model, optimizer, epoch, args, exp_string, 
 def validate(npy_dataset, model, args):
     # switch to evaluate mode
     model.eval()
-
+    model.num_updates = args.test_num_updates
     np.random.seed(1)
     random.seed(1)
     metaval_accuracies = []
-    max_acc = 0
-    with torch.no_grad():
-        for itr in range(NUM_TEST_POINTS):
-            model.meta_lr = 0.0
-            meta_train_ims, meta_train_lbls, meta_test_ims, meta_test_lbls, meta_positive_labels = \
-                npy_dataset.get_data_n_tasks(args.meta_batch_size, train=False)
-            total_accuracy_support, total_accuracy_query, total_accuracy_two_way = model(meta_train_ims, meta_train_lbls,
-                                                meta_test_ims, meta_test_lbls, meta_positive_labels, itr, Stage.TEST_STAGE)
-            metaval_accuracies.append([total_accuracy_support, total_accuracy_query, total_accuracy_two_way])
-        metaval_accuracies = np.array(metaval_accuracies)
-        means = np.mean(metaval_accuracies, 0)
-        stds = np.std(metaval_accuracies, 0)
-        ci95 = 1.96 * stds / np.sqrt(NUM_TEST_POINTS)
+    for itr in range(NUM_TEST_POINTS):
+        model.meta_lr = 0.0
+        meta_train_ims, meta_train_lbls, meta_test_ims, meta_test_lbls, meta_positive_labels = \
+            npy_dataset.get_data_n_tasks(args.meta_batch_size, train=False)
+        meta_train_ims = meta_train_ims.cuda()
+        meta_train_lbls = meta_train_lbls.cuda()
+        meta_test_ims = meta_test_ims.cuda()
+        meta_test_lbls = meta_test_lbls.cuda()
+        meta_positive_labels = meta_positive_labels.cuda()  # 该positive指的是train数据集的postive
+        total_accuracy_support, total_accuracy_query, total_accuracy_two_way = model.forward(meta_train_ims, meta_train_lbls,
+                                            meta_test_ims, meta_test_lbls, meta_positive_labels, itr, Stage.TEST_STAGE)
+        total_accuracy_query = [acc.item() for acc in total_accuracy_query]
+        total_accuracy_two_way = [acc.item() for acc in total_accuracy_two_way]
+        metaval_accuracies.append([total_accuracy_query, total_accuracy_two_way])
+    metaval_accuracies = np.array(metaval_accuracies)
+    means = np.mean(metaval_accuracies, 0)
+    stds = np.std(metaval_accuracies, 0)
+    ci95 = 1.96 * stds / np.sqrt(NUM_TEST_POINTS)
 
-        print('----------------------------------------')
-        print('Mean validation accuracy:', means[:1 + args.test_num_updates])
-        print('Mean validation stddev:', stds[:1 + args.test_num_updates])
-        print('Mean validation 95_range', ci95[:1 + args.test_num_updates])
-        print('------------------', )
-        print('Mean validation accuracy2:', means[1 + args.test_num_updates:])
-        print('Mean validation stddev2:', stds[1 + args.test_num_updates:])
-        print('Mean validation 95_range2', ci95[1 + args.test_num_updates:])
-        print('----------------------------------------', )
-
+    print('----------------------------------------')
+    print('Mean validation accuracy:', means[0])
+    print('Mean validation stddev:', stds[0])
+    print('Mean validation 95_range', ci95[0])
+    print('------------------', )
+    print('Mean validation accuracy2:', means[1])
+    print('Mean validation stddev2:', stds[1])
+    print('Mean validation 95_range2', ci95[1])
+    print('----------------------------------------', )
+    model.train()
+    model.num_updates = args.num_updates
     return means
 
 
