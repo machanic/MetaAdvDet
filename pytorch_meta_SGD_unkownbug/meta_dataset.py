@@ -5,6 +5,14 @@ import random
 from tensorflow_meta_SGD.utils import get_image_paths, get_images_specify
 import torch
 import numpy as np
+from enum import Enum, unique
+import glob
+
+@unique
+class SPLIT_DATA_PROTOCOL(Enum):
+    TRAIN_I_TEST_II = 0
+    TRAIN_II_TEST_I = 1
+    TRAIN_ALL_TEST_ALL = 2
 
 # meta learning 总体套路: 一个batch分为n个task，每个task又分为5-way,每个way分为support和query
 class NpyDataset(data.Dataset):
@@ -13,7 +21,7 @@ class NpyDataset(data.Dataset):
     A "class" is considered a class of omniglot digits or a particular sinusoid function.
     """
 
-    def __init__(self, num_samples_per_class, batch_size, args, dataset, is_train):
+    def __init__(self, num_samples_per_class, batch_size, args, dataset, is_train, split_data_protocol):
         """
         Args:
             num_samples_per_class: num samples to generate "per class" in one batch
@@ -28,15 +36,28 @@ class NpyDataset(data.Dataset):
         self.args = args
         self.train = is_train  # 区分训练集和测试集
 
-        metatrain_folder = DATA_ROOT + '/train'
-        metaval_folder = DATA_ROOT + "/test"
+        if split_data_protocol == SPLIT_DATA_PROTOCOL.TRAIN_I_TEST_II:
+            train_sub_folder = "I"
+            test_sub_folder = "II"
+        elif split_data_protocol == SPLIT_DATA_PROTOCOL.TRAIN_II_TEST_I:
+            train_sub_folder = "II"
+            test_sub_folder = "I"
+        else:
+            train_sub_folder = "*"
+            test_sub_folder = "*"
+        metatrain_folder = DATA_ROOT[dataset] + '/train/' + train_sub_folder
+        metaval_folder = DATA_ROOT[dataset] + "/test/" + test_sub_folder
 
-        metatrain_folders = [os.path.join(metatrain_folder, label) \
-                             for label in os.listdir(metatrain_folder) \
-                             if os.path.isdir(os.path.join(metatrain_folder, label))]
-        metaval_folders = [os.path.join(metaval_folder, label) \
-                           for label in os.listdir(metaval_folder) \
-                           if os.path.isdir(os.path.join(metaval_folder, label))]
+        metatrain_folders = []
+        metaval_folders = []
+        for root_folder in glob.glob(metatrain_folder):
+            for label in os.listdir(root_folder):
+                if os.path.isdir(os.path.join(root_folder, label)):
+                    metatrain_folders.append(os.path.join(root_folder, label))
+        for root_folder in glob.glob(metaval_folder):
+            for label in os.listdir(root_folder):
+                if os.path.isdir(os.path.join(root_folder, label)):
+                    metaval_folders.append(os.path.join(root_folder, label))
         # get the positive and negative folder if num_classes is 2
         self.metatrain_folders_p = [folder for folder in metatrain_folders if folder.endswith('_1')]  # 1 表示干净真实图片
         self.metatrain_folders_n = [folder for folder in metatrain_folders if not folder.endswith('_1')]

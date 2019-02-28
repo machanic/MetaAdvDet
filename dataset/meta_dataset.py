@@ -5,6 +5,24 @@ import random
 from tensorflow_meta_SGD.utils import get_image_paths, get_images_specify
 import torch
 import numpy as np
+from enum import Enum, unique
+import glob
+import pickle
+
+
+@unique
+class LOAD_TASK_MODE(Enum):
+    LOAD = "LOAD"
+    NO_LOAD = "NO_LOAD"
+
+@unique
+class SPLIT_DATA_PROTOCOL(Enum):
+    TRAIN_I_TEST_II = "TRAIN_I_TEST_II"
+    TRAIN_II_TEST_I = "TRAIN_II_TEST_I"
+    TRAIN_ALL_TEST_ALL = "TRAIN_ALL_TEST_ALL"
+
+    def __str__(self):
+        return self.value
 
 # meta learning 总体套路: 一个batch分为n个task，每个task又分为5-way,每个way分为support和query
 class NpyDataset(data.Dataset):
@@ -13,7 +31,7 @@ class NpyDataset(data.Dataset):
     A "class" is considered a class of omniglot digits or a particular sinusoid function.
     """
 
-    def __init__(self, num_samples_per_class, args, dataset, is_train):
+    def __init__(self, num_samples_per_class, args, dataset, is_train, task_dump_path, load_mode, split_data_protocol):
         """
         Args:
             num_samples_per_class: num samples to generate "per class" in one batch
@@ -27,15 +45,28 @@ class NpyDataset(data.Dataset):
         self.args = args
         self.train = is_train  # 区分训练集和测试集
 
-        metatrain_folder = DATA_ROOT + '/train'
-        metaval_folder = DATA_ROOT + "/test"
+        if split_data_protocol == SPLIT_DATA_PROTOCOL.TRAIN_I_TEST_II:
+            train_sub_folder = "I"
+            test_sub_folder = "II"
+        elif split_data_protocol == SPLIT_DATA_PROTOCOL.TRAIN_II_TEST_I:
+            train_sub_folder = "II"
+            test_sub_folder = "I"
+        else:
+            train_sub_folder = "*"
+            test_sub_folder = "*"
+        metatrain_folder = DATA_ROOT[dataset] + '/train/' + train_sub_folder
+        metaval_folder = DATA_ROOT[dataset] + "/test/" + test_sub_folder
 
-        metatrain_folders = [os.path.join(metatrain_folder, label) \
-                             for label in os.listdir(metatrain_folder) \
-                             if os.path.isdir(os.path.join(metatrain_folder, label))]
-        metaval_folders = [os.path.join(metaval_folder, label) \
-                           for label in os.listdir(metaval_folder) \
-                           if os.path.isdir(os.path.join(metaval_folder, label))]
+        metatrain_folders = []
+        metaval_folders = []
+        for root_folder in glob.glob(metatrain_folder):
+            for label in os.listdir(root_folder):
+                if os.path.isdir(os.path.join(root_folder, label)):
+                    metatrain_folders.append(os.path.join(root_folder, label))
+        for root_folder in glob.glob(metaval_folder):
+            for label in os.listdir(root_folder):
+                if os.path.isdir(os.path.join(root_folder, label)):
+                    metaval_folders.append(os.path.join(root_folder, label))
         # get the positive and negative folder if num_classes is 2
         self.metatrain_folders_p = [folder for folder in metatrain_folders if folder.endswith('_1')]  # 1 表示干净真实图片
         self.metatrain_folders_n = [folder for folder in metatrain_folders if not folder.endswith('_1')]
@@ -46,14 +77,17 @@ class NpyDataset(data.Dataset):
         self.metaval_folders = metaval_folders
 
         self.num_total_train_batches = args.tot_num_tasks
-        self.num_total_val_batches = 720
+        self.num_total_val_batches = 1000
 
         if is_train:
-            self.store_data_per_task(train=True, random_sample=True)
+            self.store_data_per_task(load_mode, task_dump_path, train=True, random_sample=True)
         else:
-            self.store_data_per_task(train=False, random_sample=False)
+            self.store_data_per_task(load_mode, task_dump_path, train=False, random_sample=False)  # test数据读取一定要random_sample = False
 
-    def store_data_per_task(self, train=True, random_sample=True):
+    def store_data_per_task(self, load_mode, task_dump_path, train=True, random_sample=True):
+        if load_mode == LOAD_TASK_MODE.LOAD:
+            assert os.path.exists(task_dump_path), "LOAD_TASK_MODE but do not exits task path: {} for load".format(task_dump_path)
+
         if train:
             folders = self.metatrain_folders
             self.train_tasks_data_classes = []
@@ -61,6 +95,10 @@ class NpyDataset(data.Dataset):
             folder_p = self.metatrain_folders_p
             folder_n = self.metatrain_folders_n
             num_total_batches = self.num_total_train_batches
+            if load_mode == LOAD_TASK_MODE.LOAD or os.path.exists(task_dump_path):
+                with open(task_dump_path, "rb") as file_obj:
+                    self.train_tasks_data_classes = pickle.load(file_obj)
+                return
         else:
             folders = self.metaval_folders
             self.val_tasks_data_classes = []
@@ -68,6 +106,10 @@ class NpyDataset(data.Dataset):
             folder_p = self.metaval_folders_p
             folder_n = self.metaval_folders_n
             num_total_batches = self.num_total_val_batches
+            if load_mode == LOAD_TASK_MODE.LOAD or os.path.exists(task_dump_path):
+                with open(task_dump_path, "rb") as file_obj:
+                    self.val_tasks_data_classes = pickle.load(file_obj)
+                return
 
         for i in range(num_total_batches):  # 总共的训练任务个数，每次迭代都从这些任务去取
             if i % 100 == 0:
@@ -88,12 +130,24 @@ class NpyDataset(data.Dataset):
                 # 从这一句可以看出, 每个task为task_folders安排的class id毫无规律可言
                 labels_and_image_paths = get_image_paths(task_folders, range(self.num_classes),
                                                     nb_samples=self.num_samples_per_class, shuffle=False, whole=False)
-            else:
+            else: # test数据读取一定要random_sample = False
                 labels_and_image_paths = get_images_specify(self.args, task_folders, range(self.num_classes),
-                                                            shuffle=False, whole=False)
-
+                                                            shuffle=False, whole=False)  # 保证support是
             data_class_task = Files_per_task(labels_and_image_paths, i, positive_label)  # 第i个task的5-way的所有数据
             tasks_data_classes.append(data_class_task)
+        self.dump_task(tasks_data_classes, task_dump_path)
+
+    def dump_task(self, tasks_data_classes, task_dump_path):
+        with open(task_dump_path, "wb") as file_obj:
+            pickle.dump(tasks_data_classes, file_obj)
+        task_dump_txt_path = task_dump_path[:task_dump_path.rindex(".")] + ".txt"
+        with open(task_dump_txt_path, "w") as file_obj:
+            for task_idx, task in enumerate(tasks_data_classes):
+                labels_and_image_paths = task.labels_and_images
+                for label, image_path_position in labels_and_image_paths:
+                    file_obj.write("{0} {1} {2} {3}\n".format(task_idx, label, task.positive_label, image_path_position))
+            file_obj.flush()
+
 
     def __getitem__(self, task_index):
         if self.train:
@@ -159,9 +213,9 @@ class NpyDataset(data.Dataset):
 
     def __len__(self):
         if self.train:
-            return self.num_total_train_batches
+            return len(self.train_tasks_data_classes)
         else:
-            return self.num_total_val_batches
+            return len(self.val_tasks_data_classes)
 
     def get_data_n_tasks(self, meta_batch_size, train=True):
         if train:

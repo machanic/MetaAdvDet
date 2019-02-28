@@ -1,9 +1,5 @@
 import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
-import torch.nn.functional as F
-from functools import partial
-import types
-from collections import defaultdict
 
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
@@ -13,92 +9,6 @@ model_urls = {
     'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
 }
 
-def conv_weight_forward(self, x, conv_fc_module_to_name, param_dict):
-    module_weight_name = conv_fc_module_to_name[self]["weight"]
-    conv_weight = param_dict[module_weight_name]
-    conv_bias = self.bias
-    if self.bias is not None:
-        module_bias_name = conv_fc_module_to_name[self]["bias"]
-        conv_bias = param_dict[module_bias_name]
-    out = F.conv2d(x, conv_weight, conv_bias, self.stride,
-                   self.padding, self.dilation, self.groups)  # B, C, H, W
-    return out
-
-def fc_weight_forward(self, x,conv_fc_module_to_name, param_dict):
-    module_weight_name = conv_fc_module_to_name[self]["weight"]
-    fc_weight = param_dict[module_weight_name]
-    fc_bias = self.bias
-    if self.bias is not None:
-        module_bias_name = conv_fc_module_to_name[self]["bias"]
-        fc_bias = param_dict[module_bias_name]
-    return F.linear(x, fc_weight, fc_bias)
-
-def bn_forward(self, x, conv_fc_module_to_name, param_dict):
-    exponential_average_factor = 0.0
-    if self.training and self.track_running_stats:
-        self.num_batches_tracked += 1
-        if self.momentum is None:  # use cumulative moving average
-            exponential_average_factor = 1.0 / self.num_batches_tracked.item()
-        else:  # use exponential moving average
-            exponential_average_factor = self.momentum
-    module_weight_name = conv_fc_module_to_name[self]["weight"]
-    weight = param_dict[module_weight_name]
-    bias = self.bias
-    if self.bias is not None:
-        module_bias_name = conv_fc_module_to_name[self]["bias"]
-        bias = param_dict[module_bias_name]
-
-    return F.batch_norm(
-        x, self.running_mean, self.running_var, weight, bias,
-        self.training or not self.track_running_stats,
-        exponential_average_factor, self.eps)
-
-
-class MetaResNet(nn.Module):
-    def __init__(self, img_size, num_classes):
-        super(MetaResNet, self).__init__()
-        self.channels = 3
-        self.img_size = img_size
-        self.net = resnet10(num_classes=num_classes)
-        self.loss_fn = nn.CrossEntropyLoss(reduction="sum")
-        self.conv_fc_module_to_name = self.construct_weights()
-
-    def construct_weights(self):
-        module_to_name = defaultdict(dict)
-        for name, module in self.net.named_modules():
-            if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear) or isinstance(module, nn.BatchNorm2d):
-                module_to_name[module]["weight"] = "network.net.{}.weight".format(name)
-                if module.bias is not None:
-                    module_to_name[module]["bias"] = "network.net.{}.bias".format(name)
-        return module_to_name
-
-    def replace_forward(self, module, weight):
-        if isinstance(module, nn.Conv2d):
-            module.forward = partial(types.MethodType(conv_weight_forward, module), conv_fc_module_to_name=self.conv_fc_module_to_name,
-                                     param_dict=weight)
-        elif isinstance(module, nn.Linear):
-            module.forward = partial(types.MethodType(fc_weight_forward, module), conv_fc_module_to_name=self.conv_fc_module_to_name,
-                                     param_dict=weight)
-        elif isinstance(module, nn.BatchNorm2d):
-            module.forward = partial(types.MethodType(bn_forward, module), conv_fc_module_to_name=self.conv_fc_module_to_name,
-                                     param_dict=weight)
-
-    def forward(self,x):
-        x = x.view(-1, self.channels, self.img_size[0], self.img_size[1])
-        return self.net(x)
-
-    def copy_weights(self, net):
-        ''' Set this module's weights to be the same as those of 'net' '''
-        for m_from, m_to in zip(net.modules(), self.modules()):
-            if isinstance(m_to, nn.Linear) or isinstance(m_to, nn.Conv2d) or isinstance(m_to, nn.BatchNorm2d):
-                m_to.weight.data = m_from.weight.data.clone()
-                if m_to.bias is not None:
-                    m_to.bias.data = m_from.bias.data.clone()
-
-    def net_forward(self, x, weight=None):
-        if weight is not None:
-            self.net.apply(partial(self.replace_forward, weight=weight))
-        return self.forward(x)
 
 def conv3x3(in_planes, out_planes, stride=1):
     """3x3 convolution with padding"""
@@ -183,10 +93,10 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, block, layers, num_classes=15,  zero_init_residual=False):
+    def __init__(self, block, layers, in_channels=3, num_classes=15,  zero_init_residual=False):
         super(ResNet, self).__init__()
         self.inplanes = 64
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3,
+        self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3,
                                bias=False)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
@@ -252,40 +162,32 @@ class ResNet(nn.Module):
 
         return x
 
+def resnet8(num_classes, **kwards):
+    model = ResNet(BasicBlock, [1,1,1], num_classes=num_classes, **kwards)
+    return model
 
-def resnet18(pretrained=False, **kwargs):
+def resnet18(num_classes, in_channels=3, pretrained=False, **kwargs):
     """Constructs a ResNet-18 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
-    model = ResNet(BasicBlock, [2, 2, 2, 2], **kwargs)
+    model = ResNet(BasicBlock, [2, 2, 2, 2], in_channels=in_channels, num_classes=num_classes)
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet18']))
     return model
 
-def resnet8(**kwards):
-    model = ResNet(BasicBlock, [1,1,1], **kwards)
-    return model
 
-def resnet10(num_classes, **kwards):
+
+def resnet10(num_classes,in_channels=3, **kwards):
     """
     Construct a ResNet-10 model
     :param kwards:
     """
     model = ResNet(BasicBlock, [1,1,1,1],
-                num_classes=num_classes)
+                num_classes=num_classes,in_channels=in_channels)
     return model
 
 
-def resnet34(pretrained=False, **kwargs):
-    """Constructs a ResNet-34 model.
-    Args:
-        pretrained (bool): If True, returns a model pre-trained on ImageNet
-    """
-    model = ResNet(BasicBlock, [3, 4, 6, 3], **kwargs)
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet34']))
-    return model
 
 
 def resnet50(pretrained=False, **kwargs):

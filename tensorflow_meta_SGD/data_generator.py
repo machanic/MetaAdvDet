@@ -30,8 +30,8 @@ class DataGenerator(object):
         self.FLAGS = FLAGS
 
 
-        metatrain_folder = DATA_ROOT + '/train'
-        metaval_folder = DATA_ROOT + "/test"
+        metatrain_folder = DATA_ROOT[dataset] + '/train'
+        metaval_folder = DATA_ROOT[dataset] + "/test"
 
         metatrain_folders = [os.path.join(metatrain_folder, label) \
                              for label in os.listdir(metatrain_folder) \
