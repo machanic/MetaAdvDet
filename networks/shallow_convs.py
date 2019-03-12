@@ -43,6 +43,14 @@ class FourConvs(nn.Module):
             nn.Linear(64 * (self.img_size[0] // 2 ** len(self.features)) *  (self.img_size[1] // 2 ** len(self.features)),
                                         num_classes))
 
+    def copy_weights(self, net):
+        ''' Set this module's weights to be the same as those of 'net' '''
+        for m_from, m_to in zip(net.modules(), self.modules()):
+            if isinstance(m_to, nn.Linear) or isinstance(m_to, nn.Conv2d) or isinstance(m_to, nn.BatchNorm2d):
+                m_to.weight.data = m_from.weight.data.clone()
+                if m_to.bias is not None:
+                    m_to.bias.data = m_from.bias.data.clone()
+
 
     def forward(self, X):
         """

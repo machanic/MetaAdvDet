@@ -7,91 +7,41 @@ import tensorflow as tf
 from tensorflow.contrib.layers.python import layers as tf_layers
 from tensorflow.python.platform import flags
 
-FLAGS = flags.FLAGS
 
 ## Image helper
-def get_image_paths(paths, labels, nb_samples=None, shuffle=True, whole=False):
-    label_images = []
-    for i, path in enumerate(paths):
-        folder_image_list = list(filter(lambda f: f.endswith("npy"), os.listdir(path)))
-        npy_path = folder_image_list[0]
-        with open(path + "/" + "count.txt", "r") as file_obj:
-            N = int(file_obj.read().strip())
-        label = labels[i]
-        if N < nb_samples:   # nb_samples 是一个batch内一个way有多少个sample
-            if len(folder_image_list) < FLAGS.num_support:
+def get_image_paths(paths, labels, num_support, num_query, is_test):
+    support_images = []
+    query_images = []
+    for i, orig_path in enumerate(paths):  # for循环一个path就表示一个way
+        for sq in ["support", "query"]:
+            path = orig_path
+            if is_test:
+                path = orig_path + "/{}".format(sq)
+            folder_image_list = list(filter(lambda f: f.endswith("npy"), os.listdir(path)))
+            npy_path = folder_image_list[0]
+            with open(path + "/" + "count.txt", "r") as file_obj:
+                N = int(file_obj.read().strip())
+            if sq == "support" and N < num_support:
                 raise ValueError('please check that whether each class contains enough images for the support set,'
-                                 'the class path is :  '+path)
-            for idx in range(N):
-                label_images.append((label, "{}#{}".format(os.path.join(path, npy_path), idx)))
-        else:
-            if whole:
-                for idx in range(N):
-                    label_images.append((label, "{}#{}".format(os.path.join(path, npy_path), idx)))
-            else:
-                sampled_images = random.sample(np.arange(N).tolist(), nb_samples)
-                for idx in sampled_images:
-                    label_images.append((label, "{}#{}".format(os.path.join(path, npy_path), idx)))
-
-    if shuffle:
-        random.shuffle(label_images)
-    return label_images
-
-
-def get_images_specify(args, paths, labels, shuffle=True, whole=False):
-    support_label_images = []
-    query_label_images = []
-    for i, path in enumerate(paths):
-        label = labels[i]
-        support_path = os.path.join(path, 'support')
-        query_path = os.path.join(path, 'query')
-
-        support_images = list(filter(lambda f: f.endswith("npy"), os.listdir(support_path)))
-        npy_path = support_images[0]
-
-        with open(support_path + "/" + "count.txt", "r") as file_obj:
-            N = int(file_obj.read().strip())
-        if N < args.num_support:
-            raise ValueError('please check that whether each class contains enough images for the support set,'
-                             'the class path is :  '+support_path)
-        sampled_images = random.sample(np.arange(N).tolist(), args.num_support)
-        for idx in sampled_images:
-            support_label_images.append((label, "{}#{}".format(os.path.join(support_path, npy_path), idx)))
-
-        query_images = list(filter(lambda f: f.endswith("npy"), os.listdir(query_path)))
-        npy_path = query_images[0]
-        with open(query_path + "/" + "count.txt", "r") as file_obj:
-            N = int(file_obj.read().strip())
-        if whole or N < args.num_query:
-            for idx in range(N):
-                query_label_images.append((label, "{}#{}".format(os.path.join(query_path, npy_path), idx)))
-        else:
-            sampled_images = random.sample(np.arange(N).tolist(), args.num_query)
+                                 'the class path is :  ' + path)
+            if sq == "query" and N < num_query:
+                raise ValueError('please check that whether each class contains enough images for the query set,'
+                                 'the class path is :  ' + path)
+            if sq == "support":
+                num = num_support
+                label_images = support_images
+            elif sq == "query":
+                num = num_query
+                label_images = query_images
+            label = labels[i]
+            sampled_images = random.sample(np.arange(N).tolist(), num)
             for idx in sampled_images:
-                query_label_images.append((label, "{}#{}".format(os.path.join(query_path, npy_path), idx)))
-        
-
-    if shuffle:
-        random.shuffle(support_label_images)
-        random.shuffle(query_label_images)
-
-    label_images = support_label_images + query_label_images
-    return label_images
+                label_images.append((label, "{}#{}".format(os.path.join(path, npy_path), idx)))
+    return support_images, query_images
 
 
-## Network helpers
-def conv_block(inp, cweight, bweight, reuse, scope, activation=tf.nn.relu, pool=True, max_pool_pad='VALID', residual=False):
-    """ Perform, conv, batch norm, nonlinearity, and max pool """
-    stride, no_stride = [1,2,2,1], [1,1,1,1]
 
-    conv_output = tf.nn.conv2d(inp, cweight, no_stride, 'SAME') + bweight
-    normed = normalize(conv_output, activation, reuse, scope)
-    if pool:
-        normed = tf.nn.max_pool(normed, stride, stride, max_pool_pad)
-    return normed
 
-def normalize(inp, activation, reuse, scope):
-    return tf_layers.batch_norm(inp, activation_fn=activation, reuse=reuse, scope=scope)
 
 
 ## Loss functions

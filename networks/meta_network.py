@@ -1,8 +1,8 @@
 import torch.nn.functional as F
 from torch import nn
-from functools import partial
 from collections import defaultdict
 import types
+from functools import partial, update_wrapper
 
 def conv_weight_forward(self, x, conv_fc_module_to_name, param_dict):
     module_weight_name = conv_fc_module_to_name[self]["weight"]
@@ -46,22 +46,37 @@ def bn_forward(self, x, conv_fc_module_to_name, param_dict):
 
 
 class MetaNetwork(nn.Module):
-    def __init__(self, net, img_size, num_classes):
+    def __init__(self, network, img_size):
         super(MetaNetwork, self).__init__()
         self.channels = 3
         self.img_size = img_size
-        self.net = net
-        self.loss_fn = nn.CrossEntropyLoss(reduction="sum")
+        self.network = network
+        self.loss_fn = nn.CrossEntropyLoss()
         self.conv_fc_module_to_name = self.construct_weights()
 
     def construct_weights(self):
         module_to_name = defaultdict(dict)
-        for name, module in self.net.named_modules():
+        for name, module in self.network.named_modules():
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear) or isinstance(module, nn.BatchNorm2d):
-                module_to_name[module]["weight"] = "network.net.{}.weight".format(name)
+                module_to_name[module]["weight"] = "network.network.{}.weight".format(name)
                 if module.bias is not None:
-                    module_to_name[module]["bias"] = "network.net.{}.bias".format(name)
+                    module_to_name[module]["bias"] = "network.network.{}.bias".format(name)
         return module_to_name
+
+    def backup_orig_forward(self, module):
+        if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear) or isinstance(module, nn.BatchNorm2d):
+            if not hasattr(module, "orig_forward"):
+                f = module.forward
+                g = types.FunctionType(f.__code__, f.__globals__, name=f.__name__,
+                                       argdefs=f.__defaults__,
+                                       closure=f.__closure__)
+                g = update_wrapper(g, f)
+                module.orig_forward = types.MethodType(g, module)
+
+    def recover_orig_forward(self, module):
+        if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear) or isinstance(module, nn.BatchNorm2d):
+            module.forward = module.orig_forward
+
 
     def replace_forward(self, module, weight):
         if isinstance(module, nn.Conv2d):
@@ -75,8 +90,8 @@ class MetaNetwork(nn.Module):
                                      param_dict=weight)
 
     def forward(self,x):
-        x = x.view(-1, self.channels, self.img_size[0], self.img_size[1])
-        return self.net(x)
+
+        return self.network(x)
 
     def copy_weights(self, net):
         ''' Set this module's weights to be the same as those of 'net' '''
@@ -87,6 +102,12 @@ class MetaNetwork(nn.Module):
                     m_to.bias.data = m_from.bias.data.clone()
 
     def net_forward(self, x, weight=None):
+        if weight is None:
+            self.network.apply(self.backup_orig_forward)  # 备份原本的forward函数
+        x = x.view(-1, self.channels, self.img_size[0], self.img_size[1])
         if weight is not None:
-            self.net.apply(partial(self.replace_forward, weight=weight))
-        return self.forward(x)
+            self.network.apply(partial(self.replace_forward, weight=weight))
+        output = self.forward(x)
+        if weight is not None:
+            self.network.apply(self.recover_orig_forward)
+        return output

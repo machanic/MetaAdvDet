@@ -3,12 +3,13 @@ import re
 import numpy as np
 import torch
 from torch.utils import data
+import os
 
 
 class TaskDatasetForDetector(data.Dataset):
 
     def __init__(self, txt_task_path, posneg_binary_label=True):
-        self.posneg_binary_label = posneg_binary_label  # False: each noise type is considered as a category, True: 1/0 True False
+        self.posneg_binary_label = posneg_binary_label  # False: each noise type is considered as an independent category, True: 1/0 True False
         noise_label_pattern = re.compile(".*?(\d+)_(\d+)/.*")
         self.data_list = []
         with open(txt_task_path, "r") as file_obj:
@@ -27,8 +28,10 @@ class TaskDatasetForDetector(data.Dataset):
 
     def __getitem__(self, item):
         npy_path, position, label = self.data_list[item]
-        im = np.memmap(npy_path, dtype='float32', mode='r', shape=(1, 32, 32, 3),
-                       offset=position * 32 * 32 * 3 * 32 // 8)
+        fobj =  open(npy_path, "rb")
+        im = np.memmap(fobj, dtype='float32', mode='r', shape=(1, 32, 32, 3),
+                       offset=position * 32 * 32 * 3 * 32 // 8).copy()
+        fobj.close()
         im = im.reshape(32,32,3)
-        im = np.transpose(im, axes=(2, 0, 1))
+        im = np.transpose(im, axes=(2, 0, 1))  # C,H,W
         return torch.from_numpy(im), label

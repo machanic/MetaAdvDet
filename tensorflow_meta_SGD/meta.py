@@ -22,17 +22,17 @@ def Nway_2way(predicts, Nway_labels, twoway_label):
     Nway_labels = (Nway_labels == twoway_label).astype(np.int32)
     return np.float32(accuracy_score(Nway_labels, predicts))
 
-# def Nway_2way(predicts, Nway_labels, twoway_label):
-#     positive_acc_counter = 0
-#     negetive_acc_counter = 0
-#     for i, predict in enumerate(predicts):
-#         if twoway_label == Nway_labels[i] and predict == twoway_label:
-#             positive_acc_counter += 1
-#         elif predict != twoway_label:
-#             negetive_acc_counter += 1
-#     acc = float(positive_acc_counter + negetive_acc_counter) / len(predicts)
-#     acc = np.float32(acc)
-#     return acc
+def Nway_2way(predicts, Nway_labels, twoway_label):
+    positive_acc_counter = 0
+    negetive_acc_counter = 0
+    for i, predict in enumerate(predicts):
+        if twoway_label == Nway_labels[i] and predict == twoway_label:
+            positive_acc_counter += 1
+        elif predict != twoway_label:
+            negetive_acc_counter += 1
+    acc = float(positive_acc_counter + negetive_acc_counter) / len(predicts)
+    acc = np.float32(acc)
+    return acc
 
 class MAML:
     def __init__(self, dim_input=1, dim_output=1):

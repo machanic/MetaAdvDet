@@ -1,4 +1,9 @@
 import sys
+
+from torch.utils.data import DataLoader
+
+from pytorch_MAML.evaluate import finetune_eval_task_accuracy
+
 sys.path.append("/home1/machen/adv_detection_meta_learning")
 import argparse
 import os
@@ -6,7 +11,6 @@ import random
 import time
 import warnings
 from networks.resnet import resnet10, resnet18
-from networks.meta_network import MetaNetwork
 from networks.shallow_convs import FourConvs
 import torch
 import torch.nn as nn
@@ -14,20 +18,18 @@ import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
-from torch.utils.data import DataLoader
 import torch.utils.data.distributed
 import torchvision.models as models
 import copy
 from torch.optim import SGD
-from config import IMAGE_SIZE, DATA_ROOT
+from config import IMAGE_SIZE
 from pytorch_MAML.score import forward_pass
 import json
 from config import IN_CHANNELS, CLASS_NUM
-from dataset.meta_dataset import SPLIT_DATA_PROTOCOL
+from pytorch_MAML.meta_dataset import SPLIT_DATA_PROTOCOL, MetaTaskDataset, LOAD_TASK_MODE
 import numpy as np
 from sklearn.metrics import accuracy_score
-from torchvision import transforms
-from image_rotate_detector.detector import Detector
+from image_rotate_detector.rotate_detector import Detector
 from image_rotate_detector.image_rotate import ImageTransform
 from dataset.presampled_task_dataset import TaskDatasetForDetector
 from config import PY_ROOT
@@ -41,16 +43,6 @@ class Identity(nn.Module):
     def forward(self, x):
         return x
 
-def get_preprocessor(input_size=(32,32)):
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
-    normalizer = transforms.Normalize(mean=mean, std=std)
-    preprocess_transform = transforms.Compose([
-        transforms.Resize(size=input_size),
-        transforms.ToTensor(),
-        normalizer
-    ])
-    return preprocess_transform
 
 # 整个程序分两步走:1. 先训练一个图像分类器，分类用原始的gt label; 2.再训练一个 detector，锁定图像分类器的weight
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
@@ -60,13 +52,13 @@ parser.add_argument('--epochs', default=40, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=500, type=int,
+parser.add_argument('-b', '--batch-size', default=100, type=int,
                     metavar='N',
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')
 parser.add_argument("--dataset",type=str,default="CIFAR-10",help="CIFAR-10" )
-parser.add_argument('--lr', '--learning-rate', default=0.0001, type=float,
+parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float,
                     metavar='LR', help='initial learning rate', dest='lr')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
@@ -85,7 +77,8 @@ parser.add_argument("--gpus", nargs='+', action='append', help="used for multi_p
 parser.add_argument("--split_data_protocol", required=True,
                     type=SPLIT_DATA_PROTOCOL, choices=list(SPLIT_DATA_PROTOCOL), help="split data protocol")
 parser.add_argument("--task_path", type=str, default=PY_ROOT+"/task/TRAIN_I_TEST_II/train_CIFAR-10_tot_num_tasks_20000_metabatch_10_way_5_shot_5_query_15.pkl", help="the task dump path")
-
+parser.add_argument("--fix_cnn", action="store_true", help="whether to fix cnn's parameter")
+parser.add_argument("--num_updates",type=int,default=1)
 best_acc1 = 0
 
 
@@ -101,13 +94,11 @@ def main():
                       'which can slow down your training considerably! '
                       'You may see unexpected behavior when restarting '
                       'from checkpoints.')
-
-
-
-
     if not args.evaluate:  # not evaluate
         # Simply call main_worker function
         main_train_worker(args)
+    else:
+        test_for_task_accuracy(args)
 
 def evaluate(net, in_,  target_positive, weights=None):
     # in_ is one task's 5-way k-shot data, in_ is either support data or query data
@@ -120,63 +111,65 @@ def evaluate(net, in_,  target_positive, weights=None):
     return float(loss) / in_.size(0), two_way_accuracy
 
 
-def test_for_comparing_maml(network, multi_tasks_val_loader, fine_tune_lr, fine_tune_num_updates, output_path):
-    test_net = copy.deepcopy(network)
-    test_net.eval()
-    msupport_loss, msupport_two_way_acc, mquery_loss, mquery_two_way_acc = [], [], [], []
-    # Select ten tasks randomly from the test set to evaluate on
-    meta_batch_size = 0
+def test_for_task_accuracy(args):
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpus[0][0])
+    # IMG_ROTATE_DET@CIFAR-10@conv4@epoch_3@lr_0.001@batch_100@fix_cnn_params@traindata_TRAIN_I_TEST_II|train_CIFAR-10_tot_num_tasks_20000_metabatch_10_way_5_shot_5_query_15.pth.tar
+    extract_pattern_detail = re.compile(
+        ".*?IMG_ROTATE_DET@(.*?)@(.*?)@epoch_(\d+)@lr_(.*?)@batch_(\d+)@(.*?)@traindata_(.*?)\|(.*?)\.pth\.tar")
+    extract_pattern_data = re.compile(".*?tot_num_tasks_(\d+)_metabatch_(\d+)_way_(\d+)_shot_(\d+)_query_(\d+).*")
+    result = {}
+    for model_path in glob.glob("{}/train_pytorch_model/IMG_ROTATE_DET*".format(PY_ROOT)):
+        ma = extract_pattern_detail.match(model_path)
+        ma_d = extract_pattern_data.match(model_path)
+        dataset_name = ma.group(1)
+        arch = ma.group(2)
+        epoch = int(ma.group(3))
+        lr = float(ma.group(4))
+        batch_size = int(ma.group(5))
+        fix_cnn_str = ma.group(6)
+        if fix_cnn_str == "no_fix_cnn_params":
+            fix_cnn = False
+        else:
+            fix_cnn = True
+        if fix_cnn:
+            continue
+        train_test_protocol = SPLIT_DATA_PROTOCOL[ma.group(7)]
+        train_data_txt_file_name = "{}/task/{}/{}.txt".format(PY_ROOT, ma.group(7), ma.group(8))
+        print("evaluate model :{}".format(os.path.basename(model_path)))
+        key = (ma.group(7), ma.group(8))
+        test_data_pkl_file_name = train_data_txt_file_name.replace("train_","test_").replace(".txt", ".pkl")
+        tot_num_tasks = int(ma_d.group(1))
+        num_classes = int(ma_d.group(3))
+        num_support = int(ma_d.group(4))
+        num_query = int(ma_d.group(5))
+        meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
+                                            dataset_name, is_train=False, load_mode=LOAD_TASK_MODE.LOAD,
+                                            pkl_task_dump_path=test_data_pkl_file_name,
+                                            split_data_protocol=train_test_protocol)
+        data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
 
-    for support_images, support_labels, query_images, query_labels, positive_labels in multi_tasks_val_loader:
-        if meta_batch_size == 0:
-            meta_batch_size = support_images.size(0)
-        for task_idx in range(support_images.size(0)):  # 选择100个task
-            # Make a test net with same parameters as our current net
-            test_net.copy_weights(network)
-            test_net.cuda()
-            test_net.train()
-            test_opt = SGD(test_net.parameters(), lr=fine_tune_lr)
-            support_binary_labels = support_labels.detach().cpu().numpy()
-            query_binary_labels = query_labels.detach().cpu().numpy()
-            p_labels =  positive_labels.detach().cpu().numpy()
-            support_binary_labels = (support_binary_labels == p_labels).astype(np.int32)
-            query_binary_labels = (query_binary_labels == p_labels).astype(np.int32)
-            support_binary_labels = torch.from_numpy(support_binary_labels).cuda().long()
-            query_binary_labels = torch.from_numpy(query_binary_labels).cuda().long()
-            for i in range(fine_tune_num_updates):  # 先fine_tune
-                in_, target = support_images[task_idx].cuda(), support_binary_labels[task_idx].cuda()  # 用positive label来反向传播
-                loss, _ = forward_pass(test_net, in_, target)
-                test_opt.zero_grad()
-                loss.backward()
-                test_opt.step()
-            # Evaluate the trained model on train and val examples
-            test_net.eval()
-            tloss, support_two_way_acc = evaluate(test_net, support_images[task_idx],
-                                                                support_binary_labels[task_idx])
-            vloss, query_two_way_acc = evaluate(test_net, query_images[task_idx],
-                                                           query_binary_labels[task_idx])
-            test_net.train()
-            msupport_loss.append(tloss)
-            msupport_two_way_acc.append(support_two_way_acc)
-            mquery_loss.append(vloss)
-            mquery_two_way_acc.append(query_two_way_acc)
-
-    msupport_loss = sum(msupport_loss) / (len(multi_tasks_val_loader) * meta_batch_size)
-    mquery_loss = sum(mquery_loss) / (len(multi_tasks_val_loader) * meta_batch_size)
-    mquery_two_way_acc = sum(mquery_two_way_acc) / len(mquery_two_way_acc)
-    msupport_two_way_acc = sum(msupport_two_way_acc) / len(msupport_two_way_acc)
-
-    result_json = {"support_loss": msupport_loss, "query_loss": mquery_loss, "support_acc_2way_tasks": msupport_two_way_acc,
-                   "query_acc_2way_tasks": mquery_two_way_acc}
-    with open(output_path, "w") as json_file:
-        json.dump(result_json, json_file)
-    print("output to json: {}".format(output_path))
-    print('-------------------------')
-    print('Meta train-loss:{} two-way acc: {}'.format(msupport_loss, msupport_two_way_acc))
-    print('Meta val-loss:{} two-way acc: {}'.format(mquery_loss, mquery_two_way_acc))
-    print('-------------------------')
-    del test_net
-    return msupport_loss, msupport_two_way_acc, mquery_loss, mquery_two_way_acc
+        if arch == "resnet10":
+            img_classifier_network = resnet10(num_classes=CLASS_NUM[args.dataset],
+                                              in_channels=IN_CHANNELS[args.dataset])
+        elif arch == "resnet18":
+            img_classifier_network = resnet18(num_classes=CLASS_NUM[args.dataset],
+                                              in_channels=IN_CHANNELS[args.dataset])
+        elif arch == "conv4":
+            img_classifier_network = FourConvs(IN_CHANNELS[args.dataset], IMAGE_SIZE[args.dataset],
+                                               CLASS_NUM[args.dataset])
+        image_transform = ImageTransform(dataset_name, [1, 2])
+        model = Detector(dataset_name, img_classifier_network, CLASS_NUM[dataset_name],image_transform, 3, fix_cnn)
+        checkpoint = torch.load(model_path, map_location=lambda storage, location: storage)
+        model.load_state_dict(checkpoint['state_dict'])
+        model.cuda()
+        print("=> loaded checkpoint '{}' (epoch {})"
+              .format(model_path, checkpoint['epoch']))
+        evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, args.num_updates)
+        result[key] = evaluate_result
+    with open(os.path.dirname(model_path) + '/IMG_ROTATE_DET_report.txt', "w") as file_obj:
+        file_obj.write(json.dumps(result))
+        file_obj.flush()
 
 def build_network(args, arch, model_path):
     assert os.path.exists(model_path), "{} not exists!".format(model_path)
@@ -201,13 +194,13 @@ def build_network(args, arch, model_path):
     checkpoint = torch.load(model_path,map_location=lambda storage, loc: storage)
     img_classifier_network.load_state_dict(checkpoint['state_dict'])
     print("=> loaded checkpoint '{}' (epoch {})"
-          .format(args.resume, checkpoint['epoch']))
+          .format(model_path, checkpoint['epoch']))
     return img_classifier_network
 
 def main_train_worker(args):
     global best_acc1
     # create model
-    # pool = mp.Pool(processes=5)
+    pool = mp.Pool(processes=5)
     # DL_IMAGE_CLASSIFIER_MNIST@resnet10@epoch_20@lr_0.0001@batch_500.pth.tar
     extract_info_pattern = re.compile(".*?DL_IMAGE_CLASSIFIER_(.*?)@(.*?)@epoch_(\d+)@lr_(.*?)@batch_(\d+).pth.tar")
     idx = 0
@@ -218,17 +211,23 @@ def main_train_worker(args):
         for img_classifier_model_path in glob.glob("{}/train_pytorch_model/DL_IMAGE_CLASSIFIER_{}*".format(PY_ROOT, args.dataset)):
             ma = extract_info_pattern.match(img_classifier_model_path)
             dataset, arch  = ma.group(1), ma.group(2)
-            detector_model_path = 'train_pytorch_model/DET_IMG_ROTATE_{}@{}@epoch_{}@lr_{}@batch_{}@{}.pth.tar'.format(
-                dataset, arch, args.epochs, args.lr, args.batch_size, post_fix_train_data_str)
+            if arch != "conv4":
+                continue
+            fix_str = "no_fix_cnn_params"
+            if args.fix_cnn:
+                fix_str = "fix_cnn_params"
+            detector_model_path = '{}/train_pytorch_model/IMG_ROTATE_DET@{}@{}@epoch_{}@lr_{}@batch_{}@{}@traindata_{}.pth.tar'.format(
+                PY_ROOT, dataset, arch, args.epochs, args.lr, args.batch_size, fix_str, post_fix_train_data_str)
             gpus = args.gpus[0]
             gpu = gpus[idx % len(gpus)]
+            print("use GPU {}".format(gpu))
             idx += 1
-            train_detector(gpu, arch, img_classifier_model_path,detector_model_path,
-                                                   trn_txt_task_path,val_txt_task_path, args)
-            # pool.apply_async(train_detector, args=(gpu, arch, img_classifier_model_path,detector_model_path,
-            #                                        trn_txt_task_path,val_txt_task_path, args))
-    # pool.close()
-    # pool.join()
+            # train_detector(gpu, arch, img_classifier_model_path,detector_model_path,
+            #                                         trn_txt_task_path,val_txt_task_path, args)
+            pool.apply_async(train_detector, args=(gpu, arch, img_classifier_model_path,detector_model_path,
+                                                  trn_txt_task_path,val_txt_task_path, args))
+    pool.close()
+    pool.join()
 
 def train_detector(gpu, arch, img_classifier_model_path, detector_model_path,
                    trn_task_data_path, val_task_data_path, args):
@@ -239,15 +238,21 @@ def train_detector(gpu, arch, img_classifier_model_path, detector_model_path,
     img_classifier_network = build_network(args, arch, img_classifier_model_path)
     detector_loss = nn.CrossEntropyLoss().cuda()  # 输入的x和y要有相同的shape
     layer_number = 3 if args.dataset in ["CIFAR-10","CIFAR-100"] else  2
-    for param in img_classifier_network.parameters():
-        param.requires_grad = False  # freeze the network parameters
-    image_transform = ImageTransform(args.dataset, [1,2])
-    detector = Detector(img_classifier_network, CLASS_NUM[args.dataset], image_transform, layer_number)
-    detector.cuda()
-    optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, detector.parameters()), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
 
+    if args.fix_cnn:
+        for param in img_classifier_network.parameters():
+            param.requires_grad = False  # freeze the network parameters
+    image_transform = ImageTransform(args.dataset, [1,2])
+    detector = Detector(args.dataset, img_classifier_network, CLASS_NUM[args.dataset], image_transform, layer_number, args.fix_cnn)
+    detector.cuda()
+    if args.fix_cnn:
+        optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, detector.parameters()), args.lr,
+                                    momentum=args.momentum,
+                                    weight_decay=args.weight_decay)
+    else:
+        optimizer = torch.optim.SGD(detector.parameters(), args.lr,
+                                    momentum=args.momentum,
+                                    weight_decay=args.weight_decay)
     cudnn.benchmark = True
     train_dataset = TaskDatasetForDetector(trn_task_data_path, True)
     train_loader = torch.utils.data.DataLoader(

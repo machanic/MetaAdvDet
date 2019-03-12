@@ -127,6 +127,13 @@ class ResNet(nn.Module):
                     nn.init.constant_(m.bn3.weight, 0)
                 elif isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
+    def copy_weights(self, net):
+        ''' Set this module's weights to be the same as those of 'net' '''
+        for m_from, m_to in zip(net.modules(), self.modules()):
+            if isinstance(m_to, nn.Linear) or isinstance(m_to, nn.Conv2d) or isinstance(m_to, nn.BatchNorm2d):
+                m_to.weight.data = m_from.weight.data.clone()
+                if m_to.bias is not None:
+                    m_to.bias.data = m_from.bias.data.clone()
 
     def _make_layer(self, block, filters, blocks, stride=1):
         downsample = None

@@ -1,11 +1,13 @@
 import sys
 sys.path.append("/home1/machen/adv_detection_meta_learning")
+from dataset.deep_learning_adversary_dataset import AdversaryDataset
 import argparse
 import os
 import random
 import time
 import warnings
 from networks.resnet import resnet10, resnet18
+from networks.meta_network import MetaNetwork
 from networks.shallow_convs import FourConvs
 import torch
 import torch.nn as nn
@@ -13,30 +15,27 @@ import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
+from torch.utils.data import DataLoader
 import torch.utils.data.distributed
 import torchvision.models as models
-from config import IMAGE_SIZE
-from pytorch_MAML.score import forward_pass
-from config import IN_CHANNELS, CLASS_NUM
-import numpy as np
-from sklearn.metrics import accuracy_score
-from torchvision.datasets import CIFAR10, MNIST, FashionMNIST
-from dataset.SVHN_dataset import SVHN
-from config import IMAGE_DATA_ROOT
-from toolkit.img_transform import get_preprocessor
+from dataset.presampled_task_dataset import TaskDatasetForDetector
+from config import IMAGE_SIZE, DATA_ROOT, IMAGE_DATA_ROOT
+import json
+from config import IN_CHANNELS, PY_ROOT
+from pytorch_MAML.meta_dataset import LOAD_TASK_MODE, SPLIT_DATA_PROTOCOL, MetaTaskDataset
+import re
+from pytorch_MAML.evaluate import finetune_eval_task_accuracy
+import glob
 
-class Identity(nn.Module):
-    def __init__(self):
-        super(Identity, self).__init__()
-    def forward(self, x):
-        return x
+
 
 
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
+
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('-a', '--arch', type=str, default="resnet10", choices=model_names + ["resnet10", "conv4"])
+parser.add_argument('-a', '--arch', type=str, default="resnet10", choices=["resnet10","conv4", "resnet18"])
 parser.add_argument('-j', '--workers', default=0, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=40, type=int, metavar='N',
@@ -48,7 +47,6 @@ parser.add_argument('-b', '--batch-size', default=500, type=int,
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')
-parser.add_argument("--dataset", type=str, choices=list(IN_CHANNELS.keys()), default="CIFAR-10",help="CIFAR-10")
 parser.add_argument('--lr', '--learning-rate', default=0.0001, type=float,
                     metavar='LR', help='initial learning rate', dest='lr')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
@@ -56,6 +54,7 @@ parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
 parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)',
                     dest='weight_decay')
+parser.add_argument("--dataset", type=str, default="CIFAR-10")
 parser.add_argument('-p', '--print-freq', default=10, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
@@ -68,14 +67,19 @@ parser.add_argument('--seed', default=None, type=int,
                     help='seed for initializing training. ')
 parser.add_argument('--gpu', default=0, type=int,
                     help='GPU id to use.')
+parser.add_argument("--split_protocol", type=SPLIT_DATA_PROTOCOL,choices=list(SPLIT_DATA_PROTOCOL), help="split protocol of data")
+parser.add_argument("--num_updates", type=int, default=1, help="the number of inner updates")
 
 best_acc1 = 0
 
+class Identity(nn.Module):
+    def __init__(self):
+        super(Identity, self).__init__()
+    def forward(self, x):
+        return x
 
 def main():
     args = parser.parse_args()
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
     if args.seed is not None:
         random.seed(args.seed)
         torch.manual_seed(args.seed)
@@ -85,66 +89,110 @@ def main():
                       'which can slow down your training considerably! '
                       'You may see unexpected behavior when restarting '
                       'from checkpoints.')
-
-
+    if args.gpu is not None:
+        print("Use GPU: {} for training".format(args.gpu))
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
 
     if not args.evaluate:  # not evaluate
         # Simply call main_worker function
-        main_train_worker(args.gpu, args)
 
-def evaluate(net, in_,  target_positive, weights=None):
-    # in_ is one task's 5-way k-shot data, in_ is either support data or query data
-    in_ = in_.cuda()
-    batch_size = in_.detach().cpu().numpy().shape[0]
-    l, out = forward_pass(net, in_, target_positive, weights)
-    loss = l.item()
-    predict = np.argmax(out.detach().cpu().numpy(), axis=1).reshape(-1)
-    two_way_accuracy = accuracy_score(predict, target_positive.detach().cpu().numpy().reshape(-1))
-    return float(loss) / in_.size(0), two_way_accuracy
+        model_path = 'train_pytorch_model/DL_DET@{}_{}@{}@epoch_{}@class_{}@lr_{}.pth.tar'.format(
+            args.dataset, args.split_protocol, args.arch,
+            args.epochs,
+            2, args.lr)
+        os.makedirs(os.path.dirname(model_path), exist_ok=True)
+        main_train_worker(args, model_path)
+    else: # finetune evaluate
+        extract_pattern = re.compile(".*?traindata_(TRAIN_.*?_TEST_.*?)_(.*?)\.pth\.tar")
+        task_txt_folder = os.path.dirname(os.path.dirname(args.train_txt_path))
+        extract_pattern_detail = re.compile(".*?DL_DET@(.*?)_(TRAIN_.*?)@(.*?)@epoch_(\d+)@way_(\d+)@lr_(.*?)@batch_(\d+)@traindata_(.*?)tot_num_tasks_(\d+)_metabatch_(\d+)_way_(\d+)_shot_(\d+)_query_(\d+)\.pth\.tar")
+        extract_way_number = re.compile(".*?way_(\d+).*")
+        result = {}
+        for model_path in glob.glob("{}/train_pytorch_model/DL_DET@*".format(PY_ROOT)):
+            if "conv4" not in model_path:
+                continue
+            print("evaluate model :{}".format(os.path.basename(model_path)))
+            ma = extract_pattern.match(model_path)
+            ma_d = extract_pattern_detail.match(model_path)
+            dataset_name = ma_d.group(1)
+            split_data_protocol = SPLIT_DATA_PROTOCOL[ma_d.group(2)]
+            arch = ma_d.group(3)
+            num_support = int(ma_d.group(12))
+            num_query = int(ma_d.group(13))
+            tot_num_tasks = int(ma_d.group(9))
+            lr = float(ma_d.group(6))
+            test_task_dump_path = task_txt_folder + "/{}/{}.pkl".format(ma.group(1), ma.group(2))
+            test_task_dump_path = test_task_dump_path.replace("train_", "test_")
+            extract_way_ma = extract_way_number.match(test_task_dump_path)
+            num_classes = int(extract_way_ma.group(1))
+            key = (ma.group(1), ma.group(2))
+            if num_support == 1:
+                continue #FIXME
+            meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
+                            dataset_name, is_train=False, load_mode=LOAD_TASK_MODE.LOAD,
+                            pkl_task_dump_path=test_task_dump_path, split_data_protocol=split_data_protocol)
+            data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False,pin_memory=True)
 
-def main_train_worker(gpu, args):
-    args.gpu = gpu
+            if arch == "conv4":
+                network = FourConvs(IN_CHANNELS[dataset_name], IMAGE_SIZE[dataset_name], 2)
+            elif arch == "resnet10":
+                network = resnet10(num_classes=2)
+            elif arch == "resnet18":
+                network = resnet18(num_classes=2)
+            model = MetaNetwork(network, IMAGE_SIZE[dataset_name])
+            model = model.cuda()
+            checkpoint = torch.load(model_path, map_location=lambda storage, location: storage)
+            model.load_state_dict(checkpoint['state_dict'])
+            print("=> loaded checkpoint '{}' (epoch {})"
+                  .format(model_path, checkpoint['epoch']))
+            evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, args.num_updates)
+            result[key] = evaluate_result
+        with open(os.path.dirname(args.train_txt_path) + '/DL_DET_report.txt', "w") as file_obj:
+            file_obj.write(json.dumps(result))
+            file_obj.flush()
 
-    if args.gpu is not None:
-        print("Use GPU: {} for training".format(args.gpu))
+def main_train_worker(args, model_path):
+    global best_acc1
     # create model
-    if args.pretrained and args.arch in models.__dict__:
-        print("=> using pre-trained model '{}'".format(args.arch))
-        network = models.__dict__[args.arch](pretrained=True)
-    else:
-        print("=> creating model '{}'".format(args.arch))
-        if args.arch == "resnet10":
-            network = resnet10(num_classes=CLASS_NUM[args.dataset], in_channels=IN_CHANNELS[args.dataset])
-        elif args.arch == "resnet18":
-            network = resnet18(num_classes=CLASS_NUM[args.dataset], in_channels=IN_CHANNELS[args.dataset])
-        elif args.arch == "conv4":
-            network = FourConvs(IN_CHANNELS[args.dataset], IMAGE_SIZE[args.dataset], CLASS_NUM[args.dataset])
-
-    if args.arch.startswith("resnet"):
-        network.avgpool = Identity()
-        network.fc = nn.Linear(512, CLASS_NUM[args.dataset])
-    elif args.arch.startswith("vgg"):
-        network.classifier[6] = nn.Linear(4096, CLASS_NUM[args.dataset])
-
-    model_path = './train_pytorch_model/DL_IMAGE_CLASSIFIER_{}@{}@epoch_{}@lr_{}@batch_{}.pth.tar'.format(
-        args.dataset, args.arch, args.epochs, args.lr, args.batch_size)
-    os.makedirs(os.path.dirname(model_path), exist_ok=True)
-    preprocessor = get_preprocessor(input_size=IMAGE_SIZE[args.dataset])
-    network.cuda()
+    # if args.pretrained:
+    #     print("=> using pre-trained model '{}'".format(args.arch))
+    #     model = models.__dict__[args.arch](pretrained=True)
+    # else:
+    #     print("=> creating model '{}'".format(args.arch))
+    #     model = models.__dict__[args.arch]()
+    #
+    # if args.arch.startswith("resnet"):
+    #     model.avgpool = Identity()
+    #     model.fc = nn.Linear(512, 15)
+    # elif args.arch.startswith("vgg"):
+    #     model.classifier[6] = nn.Linear(4096, 15)
+    if args.arch == "conv4":
+        network = FourConvs(IN_CHANNELS[args.dataset], IMAGE_SIZE[args.dataset], 2)
+    elif args.arch == "resnet10":
+        network = resnet10(num_classes=2)
+    elif args.arch == "resnet18":
+        network = resnet18(num_classes=2)
+    model = MetaNetwork(network, IMAGE_SIZE[args.dataset])
+    model = model.cuda()
+    train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.arch), True, args.split_protocol)
+    val_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.arch), False,
+                                     args.split_protocol)
 
     # define loss function (criterion) and optimizer
-    image_classifier_loss = nn.CrossEntropyLoss().cuda()
-
-    optimizer = torch.optim.SGD(network.parameters(), args.lr,
+    criterion = nn.CrossEntropyLoss().cuda(args.gpu)
+    optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
+
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint['epoch']
-            network.load_state_dict(checkpoint['state_dict'])
+            best_acc1 = checkpoint['best_acc1']
+            model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
@@ -153,19 +201,7 @@ def main_train_worker(gpu, args):
 
     cudnn.benchmark = True
 
-    if args.dataset == "CIFAR-10":
-        train_dataset = CIFAR10(IMAGE_DATA_ROOT[args.dataset], train=True, transform=preprocessor)
-        val_dataset = CIFAR10(IMAGE_DATA_ROOT[args.dataset], train=False, transform=preprocessor)
-    elif args.dataset == "MNIST":
-        train_dataset = MNIST(IMAGE_DATA_ROOT[args.dataset], train=True, transform=preprocessor, download=True)
-        val_dataset = MNIST(IMAGE_DATA_ROOT[args.dataset], train=False, transform=preprocessor, download=True)
-    elif args.dataset == "F-MNIST":
-        train_dataset = FashionMNIST(IMAGE_DATA_ROOT[args.dataset], train=True,transform=preprocessor, download=True)
-        val_dataset = FashionMNIST(IMAGE_DATA_ROOT[args.dataset], train=False, transform=preprocessor, download=True)
-    elif args.dataset=="SVHN":
-        train_dataset = SVHN(IMAGE_DATA_ROOT[args.dataset], train=True, transform=preprocessor)
-        val_dataset = SVHN(IMAGE_DATA_ROOT[args.dataset], train=False, transform=preprocessor)
-
+    # Data loading code
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers, pin_memory=True)
@@ -177,19 +213,17 @@ def main_train_worker(gpu, args):
 
     for epoch in range(args.start_epoch, args.epochs):
         adjust_learning_rate(optimizer, epoch, args)
-
         # train for one epoch
-        train(train_loader, network, image_classifier_loss, optimizer, epoch, args)
-
+        train(train_loader, model, criterion, optimizer, epoch, args)
         # evaluate on validation set
-        acc1 = validate(val_loader, network, image_classifier_loss, args)
-
+        acc1 = validate(val_loader, model, criterion, args)
         # remember best acc@1 and save checkpoint
-
+        best_acc1 = max(acc1, best_acc1)
         save_checkpoint({
             'epoch': epoch + 1,
             'arch': args.arch,
-            'state_dict': network.state_dict(),
+            'state_dict': model.state_dict(),
+            'best_acc1': best_acc1,
             'optimizer': optimizer.state_dict(),
         }, filename=model_path)
 
@@ -209,14 +243,12 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
-
         input = input.cuda()
         target = target.cuda()
 
         # compute output
         output = model(input)
         loss = criterion(output, target)
-
         # measure accuracy and record loss
         acc1,  = accuracy(output, target, topk=(1,))
         losses.update(loss.item(), input.size(0))
@@ -256,9 +288,11 @@ def validate(val_loader, model, criterion, args):
         for i, (input, target) in enumerate(val_loader):
             input = input.cuda()
             target = target.cuda()
+
             # compute output
             output = model(input)
             loss = criterion(output, target)
+
             # measure accuracy and record loss
             acc1,  = accuracy(output, target, topk=(1, ))
             losses.update(loss.item(), input.size(0))
@@ -276,12 +310,16 @@ def validate(val_loader, model, criterion, args):
                       'Acc@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
                     i, len(val_loader), batch_time=batch_time, loss=losses,
                     top1=top1))
-        print('Validate Set Acc@1 {top1.avg:.3f}'
+
+        print(' * Acc@1 {top1.avg:.3f}'
               .format(top1=top1))
+
     return top1.avg
+
 
 def save_checkpoint(state, filename='traditional_dl.pth.tar'):
     torch.save(state, filename)
+
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -314,7 +352,6 @@ def accuracy(output, target, topk=(1,)):
     with torch.no_grad():
         maxk = max(topk)
         batch_size = target.size(0)
-
         _, pred = output.topk(maxk, 1, True, True)
         pred = pred.t()
         correct = pred.eq(target.view(1, -1).expand_as(pred))

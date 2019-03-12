@@ -4,7 +4,7 @@ import cv2
 import random
 
 from tensorflow.python.platform import flags
-from tensorflow_meta_SGD.utils import get_image_paths, get_images_specify
+from tensorflow_meta_SGD.utils import get_image_paths
 import os
 from config import IMAGE_SIZE,DATA_ROOT
 
@@ -95,13 +95,10 @@ class DataGenerator(object):
                     break
 
             # 为每一类sample出self.num_samples_per_class个样本
-            if random_sample:
-                # 从这一句可以看出, 每个task为task_folders安排的class id毫无规律可言
-                labels_and_image_paths = get_image_paths(task_folders, range(self.num_classes),
-                                                    nb_samples=self.num_samples_per_class, shuffle=False, whole=False)
-            else:
-                labels_and_image_paths = get_images_specify(self.FLAGS, task_folders, range(self.num_classes),
-                                                            shuffle=False, whole=False)
+            # 从这一句可以看出, 每个task为task_folders安排的class id毫无规律可言
+            labels_and_image_paths = get_image_paths(task_folders, range(self.num_classes),
+                                                nb_samples=self.num_samples_per_class,  whole=False)
+
 
             data_class_task = Files_per_task(labels_and_image_paths, i, positive_label)  # 第i个task的5-way的所有数据
             tasks_data_classes.append(data_class_task)

@@ -28,8 +28,8 @@ class TensorBoardWriter(object):
     def record_val_support_acc(self, tensor, iter:int):
         self.writer.add_scalar("{}/val_support_acc".format(self.data_prefix), tensor, iter)
 
-    def record_val_query_acc(self, tensor, iter:int):
-        self.writer.add_scalar("{}/val_query_acc".format(self.data_prefix), tensor, iter)
+    def record_val_query_F1(self, tensor, iter:int):
+        self.writer.add_scalar("{}/val_query_F1".format(self.data_prefix), tensor, iter)
 
     def record_val_support_twoway_acc(self, tensor, iter:int):
         self.writer.add_scalar("{}/val_support_2way_acc".format(self.data_prefix), tensor, iter)

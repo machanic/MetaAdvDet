@@ -47,10 +47,7 @@ class InnerLoop(nn.Module):
     
     def forward(self, in_support, in_query, target_support, target_query, positive_label):
         in_support, in_query, target_support, target_query = in_support.detach(), in_query.detach(), target_support.detach(), target_query.detach()
-        positive_label = positive_label.detach()
         ##### Test net before training, should be random accuracy ####
-        tr_pre_loss, tr_pre_acc, tr_pre_two_acc = evaluate(self, in_support, target_support,positive_label)
-        val_pre_loss, val_pre_acc, val_pre_two_acc = evaluate(self, in_query, target_query,positive_label)
         fast_weights = OrderedDict((name, param) for (name, param) in self.named_parameters())
         for i in range(self.num_updates):
             if i==0:
@@ -61,8 +58,8 @@ class InnerLoop(nn.Module):
                 grads = torch.autograd.grad(loss, fast_weights.values())
             fast_weights = OrderedDict((name, param - self.step_size*grad) for ((name, param), grad) in zip(fast_weights.items(), grads))
         ##### Test net after training, should be better than random ####
-        tr_post_loss, tr_post_acc, tr_post_two_acc = evaluate(self, in_support, target_support,positive_label, weights=fast_weights)
-        val_post_loss, val_post_acc, val_post_two_acc = evaluate(self, in_query, target_query,positive_label, weights=fast_weights)
+        # tr_post_loss, tr_post_acc, tr_post_two_acc = evaluate(self, in_support, target_support,positive_label, weights=fast_weights)
+        # val_post_loss, val_post_acc, val_post_two_acc = evaluate(self, in_query, target_query,positive_label, weights=fast_weights)
         # print('Train Inner step Loss pre:{} post:{}'.format(tr_pre_loss, tr_post_loss))
         # print('Train Inner step Acc pre:{} post:{}'.format(tr_pre_acc, tr_post_acc))
         # print('Train Inner step 2-Acc pre:{} post:{}'.format(tr_pre_two_acc, tr_post_two_acc))
@@ -74,6 +71,5 @@ class InnerLoop(nn.Module):
         loss = loss / self.meta_batch_size # normalize loss
         grads = torch.autograd.grad(loss, self.parameters())
         meta_grads = {name:g for ((name, _), g) in zip(self.named_parameters(), grads)}
-        metrics = (tr_post_loss, tr_post_acc, val_post_loss, val_post_acc)
-        return metrics, meta_grads
+        return meta_grads
 

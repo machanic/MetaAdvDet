@@ -1,8 +1,10 @@
+import json
+
 from torch.utils import data
 from config import IMAGE_SIZE,DATA_ROOT
 import os
 import random
-from tensorflow_meta_SGD.utils import get_image_paths, get_images_specify
+from tensorflow_meta_SGD.utils import get_image_paths
 import torch
 import numpy as np
 from enum import Enum, unique
@@ -20,31 +22,33 @@ class SPLIT_DATA_PROTOCOL(Enum):
     TRAIN_I_TEST_II = "TRAIN_I_TEST_II"
     TRAIN_II_TEST_I = "TRAIN_II_TEST_I"
     TRAIN_ALL_TEST_ALL = "TRAIN_ALL_TEST_ALL"
+    LEAVE_ONE_FOR_TEST = "LEAVE_ONE_FOR_TEST"
 
     def __str__(self):
         return self.value
 
 # meta learning 总体套路: 一个batch分为n个task，每个task又分为5-way,每个way分为support和query
-class NpyDataset(data.Dataset):
+class MetaTaskDataset(data.Dataset):
     """
     Data Generator capable of generating batches of data.
     A "class" is considered a class of omniglot digits or a particular sinusoid function.
     """
 
-    def __init__(self, num_samples_per_class, args, dataset, is_train, task_dump_path, load_mode, split_data_protocol):
+    def __init__(self, num_tot_tasks, num_classes, num_support, num_query,
+                 dataset, is_train, pkl_task_dump_path, load_mode, split_data_protocol):
         """
         Args:
             num_samples_per_class: num samples to generate "per class" in one batch
             batch_size: size of meta batch size (e.g. number of functions)
         """
-        self.num_samples_per_class = num_samples_per_class
-        self.num_classes = args.num_classes  # e.g. 5-way
+        self.num_samples_per_class = num_support + num_query
+        self.num_classes = num_classes  # e.g. 5-way
         self.img_size = IMAGE_SIZE[dataset]
         self.dim_input = np.prod(self.img_size) * 3
         self.dim_output = self.num_classes
-        self.args = args
         self.train = is_train  # 区分训练集和测试集
-
+        self.num_support = num_support
+        self.num_query = num_query
         if split_data_protocol == SPLIT_DATA_PROTOCOL.TRAIN_I_TEST_II:
             train_sub_folder = "I"
             test_sub_folder = "II"
@@ -76,17 +80,17 @@ class NpyDataset(data.Dataset):
         self.metatrain_folders = metatrain_folders
         self.metaval_folders = metaval_folders
 
-        self.num_total_train_batches = args.tot_num_tasks
+        self.num_total_train_batches = num_tot_tasks
         self.num_total_val_batches = 1000
 
         if is_train:
-            self.store_data_per_task(load_mode, task_dump_path, train=True, random_sample=True)
+            self.store_data_per_task(load_mode, pkl_task_dump_path, train=True, random_sample=True)
         else:
-            self.store_data_per_task(load_mode, task_dump_path, train=False, random_sample=False)  # test数据读取一定要random_sample = False
+            self.store_data_per_task(load_mode, pkl_task_dump_path, train=False, random_sample=False)  # test数据读取一定要random_sample = False
 
-    def store_data_per_task(self, load_mode, task_dump_path, train=True, random_sample=True):
+    def store_data_per_task(self, load_mode, pkl_task_dump_path, train=True, random_sample=True):
         if load_mode == LOAD_TASK_MODE.LOAD:
-            assert os.path.exists(task_dump_path), "LOAD_TASK_MODE but do not exits task path: {} for load".format(task_dump_path)
+            assert os.path.exists(pkl_task_dump_path), "LOAD_TASK_MODE but do not exits task path: {} for load".format(pkl_task_dump_path)
 
         if train:
             folders = self.metatrain_folders
@@ -95,8 +99,8 @@ class NpyDataset(data.Dataset):
             folder_p = self.metatrain_folders_p
             folder_n = self.metatrain_folders_n
             num_total_batches = self.num_total_train_batches
-            if load_mode == LOAD_TASK_MODE.LOAD or os.path.exists(task_dump_path):
-                with open(task_dump_path, "rb") as file_obj:
+            if load_mode == LOAD_TASK_MODE.LOAD and os.path.exists(pkl_task_dump_path):
+                with open(pkl_task_dump_path, "rb") as file_obj:
                     self.train_tasks_data_classes = pickle.load(file_obj)
                 return
         else:
@@ -106,8 +110,8 @@ class NpyDataset(data.Dataset):
             folder_p = self.metaval_folders_p
             folder_n = self.metaval_folders_n
             num_total_batches = self.num_total_val_batches
-            if load_mode == LOAD_TASK_MODE.LOAD or os.path.exists(task_dump_path):
-                with open(task_dump_path, "rb") as file_obj:
+            if load_mode == LOAD_TASK_MODE.LOAD and os.path.exists(pkl_task_dump_path):
+                with open(pkl_task_dump_path, "rb") as file_obj:
                     self.val_tasks_data_classes = pickle.load(file_obj)
                 return
 
@@ -116,7 +120,7 @@ class NpyDataset(data.Dataset):
                 print("store {} tasks".format(i))
             p_folder = random.sample(folder_p, 1)  # 随机取出一个folder
             n_folder = random.sample(folder_n, self.num_classes - 1)  # 剩余的4-way
-            task_folders = p_folder + n_folder
+            task_folders = p_folder + n_folder  # 共5个文件夹表示5-way
 
             random.shuffle(task_folders)
             positive_label = 0
@@ -126,16 +130,13 @@ class NpyDataset(data.Dataset):
                     break
 
             # 为每一类sample出self.num_samples_per_class个样本
-            if random_sample:
-                # 从这一句可以看出, 每个task为task_folders安排的class id毫无规律可言
-                labels_and_image_paths = get_image_paths(task_folders, range(self.num_classes),
-                                                    nb_samples=self.num_samples_per_class, shuffle=False, whole=False)
-            else: # test数据读取一定要random_sample = False
-                labels_and_image_paths = get_images_specify(self.args, task_folders, range(self.num_classes),
-                                                            shuffle=False, whole=False)  # 保证support是
-            data_class_task = Files_per_task(labels_and_image_paths, i, positive_label)  # 第i个task的5-way的所有数据
+             # 从这一句可以看出, 每个task为task_folders随机安排的class id毫无规律可言
+            # nb_samples = self.num_samples_per_class = support num + query num
+            supp_lbs_and_img_paths, query_lbs_and_img_paths = get_image_paths(task_folders, range(self.num_classes), self.num_support, self.num_query,
+                                                  is_test=not train) # task_folders包含正负样本的分布，但是具体support取几个，query取几个
+            data_class_task = FilesPerTask(supp_lbs_and_img_paths, query_lbs_and_img_paths, i, positive_label)  # 第i个task的5-way的所有数据
             tasks_data_classes.append(data_class_task)
-        self.dump_task(tasks_data_classes, task_dump_path)
+        self.dump_task(tasks_data_classes, pkl_task_dump_path)
 
     def dump_task(self, tasks_data_classes, task_dump_path):
         with open(task_dump_path, "wb") as file_obj:
@@ -143,9 +144,10 @@ class NpyDataset(data.Dataset):
         task_dump_txt_path = task_dump_path[:task_dump_path.rindex(".")] + ".txt"
         with open(task_dump_txt_path, "w") as file_obj:
             for task_idx, task in enumerate(tasks_data_classes):
-                labels_and_image_paths = task.labels_and_images
-                for label, image_path_position in labels_and_image_paths:
-                    file_obj.write("{0} {1} {2} {3}\n".format(task_idx, label, task.positive_label, image_path_position))
+                for labels_and_image_paths in [task.support_labels_imgs, task.query_labels_imgs]:
+                    for label, image_path_position in labels_and_image_paths:
+                        json_str = {"task_idx": task_idx, "way_label": label, "pos_label": task.positive_label, "img_path": image_path_position}
+                        file_obj.write("{}\n".format(json.dumps(json_str)))
             file_obj.flush()
 
 
@@ -155,18 +157,9 @@ class NpyDataset(data.Dataset):
         else:
             task_class = self.val_tasks_data_classes[task_index]
 
-        labels_and_image_paths = task_class.labels_and_images
+        train_files = task_class.support_labels_imgs
+        test_files = task_class.query_labels_imgs
         task_positive_label = task_class.positive_label
-        train_files = [] # train_files包含5-way的所有support样本
-        test_files = []  # test_files包含5-way的所有query样本
-
-        for i, _ in enumerate(labels_and_image_paths):  # 5_way 所有sample number
-            # num_samples_per_class 是一个batch的一个way的samples总量
-            if i % self.num_samples_per_class < self.args.num_support:   # num_support support集中收集每个way取出多少个shot
-                train_files.append(labels_and_image_paths[i])
-            else: # 剩余的给test_files
-                test_files.append(labels_and_image_paths[i])
-
         random.shuffle(train_files)
         random.shuffle(test_files)
 
@@ -176,7 +169,9 @@ class NpyDataset(data.Dataset):
             image_path = label_and_image_path[1]
             image_idx = int(image_path[image_path.rindex("#")+1:])
             image_path = image_path[:image_path.rindex("#")]
-            im = np.memmap(image_path, dtype='float32', mode='r', shape=(1, 32, 32, 3), offset=image_idx * 32 * 32 * 3 * 32//8)
+            fobj = open(image_path, "rb")
+            im = np.memmap(fobj, dtype='float32', mode='r', shape=(1, 32, 32, 3), offset=image_idx * 32 * 32 * 3 * 32//8).copy()
+            fobj.close()
             im = im.reshape(32,32,3)
             im = np.transpose(im, axes=(2,0,1))
             im2 = im.reshape(self.dim_input)
@@ -193,7 +188,9 @@ class NpyDataset(data.Dataset):
             image_path = label_and_image_path[1]
             image_idx = int(image_path[image_path.rindex("#") + 1:])
             image_path = image_path[:image_path.rindex("#")]
-            im = np.memmap(image_path, dtype='float32', mode='r', shape=(1, 32, 32, 3), offset=image_idx * 32 * 32 * 3 * 32//8)
+            fobj = open(image_path, "rb")
+            im = np.memmap(fobj, dtype='float32', mode='r', shape=(1, 32, 32, 3), offset=image_idx * 32 * 32 * 3 * 32//8).copy()
+            fobj.close()
             im = im.reshape(32, 32, 3)
             im = np.transpose(im, axes=(2, 0, 1))
             im2 = im.reshape(self.dim_input)
@@ -247,8 +244,9 @@ class NpyDataset(data.Dataset):
 
 
 
-class Files_per_task(object):
-    def __init__(self, labels_and_images, task_index, positive_label):
-        self.labels_and_images = labels_and_images
+class FilesPerTask(object):
+    def __init__(self, support_labels_imgs, query_labels_imgs, task_index, positive_label):
+        self.support_labels_imgs = support_labels_imgs
+        self.query_labels_imgs = query_labels_imgs
         self.task_index = task_index
         self.positive_label = positive_label
