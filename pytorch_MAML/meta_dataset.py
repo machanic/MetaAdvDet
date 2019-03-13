@@ -1,7 +1,7 @@
 import json
 
 from torch.utils import data
-from config import IMAGE_SIZE,DATA_ROOT
+from config import IMAGE_SIZE, DATA_ROOT, CLASS_NUM
 import os
 import random
 from tensorflow_meta_SGD.utils import get_image_paths
@@ -35,7 +35,7 @@ class MetaTaskDataset(data.Dataset):
     """
 
     def __init__(self, num_tot_tasks, num_classes, num_support, num_query,
-                 dataset, is_train, pkl_task_dump_path, load_mode, split_data_protocol):
+                 dataset, is_train, pkl_task_dump_path, load_mode, split_data_protocol, no_random_way):
         """
         Args:
             num_samples_per_class: num samples to generate "per class" in one batch
@@ -47,6 +47,7 @@ class MetaTaskDataset(data.Dataset):
         self.dim_input = np.prod(self.img_size) * 3
         self.dim_output = self.num_classes
         self.train = is_train  # 区分训练集和测试集
+        self.no_random_way =  no_random_way
         self.num_support = num_support
         self.num_query = num_query
         if split_data_protocol == SPLIT_DATA_PROTOCOL.TRAIN_I_TEST_II:
@@ -84,11 +85,11 @@ class MetaTaskDataset(data.Dataset):
         self.num_total_val_batches = 1000
 
         if is_train:
-            self.store_data_per_task(load_mode, pkl_task_dump_path, train=True, random_sample=True)
+            self.store_data_per_task(load_mode, pkl_task_dump_path, train=True)
         else:
-            self.store_data_per_task(load_mode, pkl_task_dump_path, train=False, random_sample=False)  # test数据读取一定要random_sample = False
+            self.store_data_per_task(load_mode, pkl_task_dump_path, train=False)  # test数据读取一定要random_sample = False
 
-    def store_data_per_task(self, load_mode, pkl_task_dump_path, train=True, random_sample=True):
+    def store_data_per_task(self, load_mode, pkl_task_dump_path, train=True):
         if load_mode == LOAD_TASK_MODE.LOAD:
             assert os.path.exists(pkl_task_dump_path), "LOAD_TASK_MODE but do not exits task path: {} for load".format(pkl_task_dump_path)
 
@@ -99,7 +100,7 @@ class MetaTaskDataset(data.Dataset):
             folder_p = self.metatrain_folders_p
             folder_n = self.metatrain_folders_n
             num_total_batches = self.num_total_train_batches
-            if load_mode == LOAD_TASK_MODE.LOAD and os.path.exists(pkl_task_dump_path):
+            if os.path.exists(pkl_task_dump_path):
                 with open(pkl_task_dump_path, "rb") as file_obj:
                     self.train_tasks_data_classes = pickle.load(file_obj)
                 return
@@ -110,7 +111,7 @@ class MetaTaskDataset(data.Dataset):
             folder_p = self.metaval_folders_p
             folder_n = self.metaval_folders_n
             num_total_batches = self.num_total_val_batches
-            if load_mode == LOAD_TASK_MODE.LOAD and os.path.exists(pkl_task_dump_path):
+            if os.path.exists(pkl_task_dump_path):
                 with open(pkl_task_dump_path, "rb") as file_obj:
                     self.val_tasks_data_classes = pickle.load(file_obj)
                 return
@@ -119,7 +120,7 @@ class MetaTaskDataset(data.Dataset):
             if i % 100 == 0:
                 print("store {} tasks".format(i))
             p_folder = random.sample(folder_p, 1)  # 随机取出一个folder
-            n_folder = random.sample(folder_n, self.num_classes - 1)  # 剩余的4-way
+            n_folder = random.sample(folder_n, self.num_classes - 1)  # 剩余的4-way, 如果是
             task_folders = p_folder + n_folder  # 共5个文件夹表示5-way
 
             random.shuffle(task_folders)
@@ -130,10 +131,10 @@ class MetaTaskDataset(data.Dataset):
                     break
 
             # 为每一类sample出self.num_samples_per_class个样本
-             # 从这一句可以看出, 每个task为task_folders随机安排的class id毫无规律可言
+             # 从这一句可以看出, 每个task为task_folders随机安排的class id毫无规律可言. 所以no_random_way也是作用在这里
             # nb_samples = self.num_samples_per_class = support num + query num
-            supp_lbs_and_img_paths, query_lbs_and_img_paths = get_image_paths(task_folders, range(self.num_classes), self.num_support, self.num_query,
-                                                  is_test=not train) # task_folders包含正负样本的分布，但是具体support取几个，query取几个
+            supp_lbs_and_img_paths, query_lbs_and_img_paths = get_image_paths(task_folders, range(self.num_classes),
+                                                    self.num_support, self.num_query, is_test=not train, use_gt_labels=self.no_random_way) # task_folders包含正负样本的分布，但是具体support取几个，query取几个
             data_class_task = FilesPerTask(supp_lbs_and_img_paths, query_lbs_and_img_paths, i, positive_label)  # 第i个task的5-way的所有数据
             tasks_data_classes.append(data_class_task)
         self.dump_task(tasks_data_classes, pkl_task_dump_path)

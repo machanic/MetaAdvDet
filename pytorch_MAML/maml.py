@@ -32,8 +32,8 @@ class MetaLearner(object):
                  inner_step_size,
                  epoch,
                  num_inner_updates, load_task_mode, task_dump_path, split_data_protocol, arch,
-                 tot_num_tasks, num_support,num_query,
-                 tensorboard_data_prefix):
+                 tot_num_tasks, num_support, num_query, no_random_way,
+                 tensorboard_data_prefix, train=True):
         super(self.__class__, self).__init__()
         self.dataset_name = dataset_name
         self.num_classes = num_classes
@@ -70,21 +70,24 @@ class MetaLearner(object):
             # self.network.load_state_dict(current_model_state)
 
         self.network.cuda()
-        train_task_dump_path = task_dump_path + "/train_{}_tot_num_tasks_{}_way_{}_shot_{}_query_{}.pkl".format(dataset_name,
-                                                                                               tot_num_tasks,
-                                                                                               num_classes, num_support, num_query)
-        os.makedirs(task_dump_path, exist_ok=True)
-        trn_dataset = MetaTaskDataset(tot_num_tasks,  num_classes, num_support, num_query,
-                                      dataset_name, is_train=True, load_mode=load_task_mode,
-                                      pkl_task_dump_path=train_task_dump_path, split_data_protocol=split_data_protocol)
-        self.train_loader = DataLoader(trn_dataset, batch_size=meta_batch_size, shuffle=True, num_workers=0, pin_memory=True)
+        if train:
+            train_task_dump_path = task_dump_path + "/train_{}_tot_num_tasks_{}_way_{}_shot_{}_query_{}.pkl".format(dataset_name,
+                                                                                                   tot_num_tasks,
+                                                                                                   num_classes, num_support, num_query)
+            os.makedirs(task_dump_path, exist_ok=True)
+            trn_dataset = MetaTaskDataset(tot_num_tasks,  num_classes, num_support, num_query,
+                                          dataset_name, is_train=True, load_mode=load_task_mode,
+                                          pkl_task_dump_path=train_task_dump_path, split_data_protocol=split_data_protocol,
+                                          no_random_way=no_random_way)
+            self.train_loader = DataLoader(trn_dataset, batch_size=meta_batch_size, shuffle=True, num_workers=0, pin_memory=True)
 
         test_task_dump_path = task_dump_path + "/test_{}_tot_num_tasks_{}_way_{}_shot_{}_query_{}.pkl".format(dataset_name,
                                                                                             tot_num_tasks,
                                                                                                num_classes,num_support,num_query)
         val_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
                                       dataset_name, is_train=False, load_mode=load_task_mode,
-                                      pkl_task_dump_path=test_task_dump_path, split_data_protocol=split_data_protocol)
+                                      pkl_task_dump_path=test_task_dump_path, split_data_protocol=split_data_protocol,
+                                      no_random_way=no_random_way)
         self.val_loader = DataLoader(val_dataset, batch_size=100, shuffle=False, num_workers=0, pin_memory=True) # 固定100个task，分别测每个task的准确率
         self.fast_net = InnerLoop(self.network, self.num_inner_updates,
                                   self.inner_step_size, self.meta_batch_size)  # 并行执行每个task
@@ -215,9 +218,11 @@ class MetaLearner(object):
                 for i in range(self.num_inner_updates):  # 先fine_tune
                     finetune_img, finetune_target = support_images[task_idx].cuda(), support_labels[task_idx].cuda()
                     loss, _  = forward_pass(test_net, finetune_img, finetune_target)
+                    # print(loss.item())
                     test_opt.zero_grad()
                     loss.backward()
                     test_opt.step()
+                # print("---------")
                 # test_net.eval()
                 # Evaluate the trained model on train and val examples
                 support_accuracy, support_F1 = evaluate(test_net, support_images[task_idx], support_labels[task_idx], positive_position[task_idx])
@@ -251,7 +256,7 @@ class MetaLearner(object):
             # Collect a meta batch update
             # Save a model snapshot every now and then
 
-            for i, (support_images, support_labels, query_images, query_labels, positive_labels) in enumerate(self.train_loader):
+            for i, (support_images, support_labels, query_images, query_labels, _) in enumerate(self.train_loader):
                 itr = epoch * len(self.train_loader) + i
                 if itr % 1000 == 0 and itr > 0:
                     result_json = self.test_task_accuracy(itr)
@@ -262,11 +267,10 @@ class MetaLearner(object):
                     # mval_acc.append(mv_acc)
                 grads = []
                 support_images, support_labels, query_images, query_labels = support_images.cuda(), support_labels.cuda(), query_images.cuda(), query_labels.cuda()
-                positive_labels = positive_labels.cuda()
                 for task_idx in range(support_images.size(0)):
                     self.fast_net.copy_weights(self.network)
                     # fast_net only forward one task's data
-                    g = self.fast_net.forward(support_images[task_idx],query_images[task_idx], support_labels[task_idx], query_labels[task_idx], positive_labels[task_idx])
+                    g = self.fast_net.forward(support_images[task_idx],query_images[task_idx], support_labels[task_idx], query_labels[task_idx])
                     # (trl, tra, vall, vala) = metrics
                     grads.append(g)
 

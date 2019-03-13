@@ -1,17 +1,17 @@
 """ Utility functions. """
-import numpy as np
 import os
 import random
-import tensorflow as tf
+import re
 
-from tensorflow.contrib.layers.python import layers as tf_layers
-from tensorflow.python.platform import flags
+import numpy as np
+import tensorflow as tf
 
 
 ## Image helper
-def get_image_paths(paths, labels, num_support, num_query, is_test):
+def get_image_paths(paths, random_labels, num_support, num_query, is_test, use_gt_labels):
     support_images = []
     query_images = []
+    extract_gt_label_pattern = re.compile(".*/(\d+)_(\d+).*")
     for i, orig_path in enumerate(paths):  # for循环一个path就表示一个way
         for sq in ["support", "query"]:
             path = orig_path
@@ -33,10 +33,16 @@ def get_image_paths(paths, labels, num_support, num_query, is_test):
             elif sq == "query":
                 num = num_query
                 label_images = query_images
-            label = labels[i]
+            label = random_labels[i]
             sampled_images = random.sample(np.arange(N).tolist(), num)
             for idx in sampled_images:
-                label_images.append((label, "{}#{}".format(os.path.join(path, npy_path), idx)))
+                whole_path = "{}#{}".format(os.path.join(path, npy_path), idx)
+                if use_gt_labels:
+                    ma = extract_gt_label_pattern.match(whole_path)
+                    gt_label = int(ma.group(2)) - 1
+                    label_images.append((gt_label, whole_path))
+                else:
+                    label_images.append((label, whole_path))
     return support_images, query_images
 
 

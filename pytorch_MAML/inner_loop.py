@@ -45,7 +45,7 @@ class InnerLoop(nn.Module):
         loss = self.loss_fn(out, target_var)
         return loss, out
     
-    def forward(self, in_support, in_query, target_support, target_query, positive_label):
+    def forward(self, in_support, in_query, target_support, target_query):
         in_support, in_query, target_support, target_query = in_support.detach(), in_query.detach(), target_support.detach(), target_query.detach()
         ##### Test net before training, should be random accuracy ####
         fast_weights = OrderedDict((name, param) for (name, param) in self.named_parameters())
