@@ -3,8 +3,6 @@ import os.path
 import sys
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 import argparse
-
-
 import torch
 import torch.optim as optim
 from torchvision import datasets, transforms

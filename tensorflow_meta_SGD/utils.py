@@ -8,7 +8,7 @@ import tensorflow as tf
 
 
 ## Image helper
-def get_image_paths(paths, random_labels, num_support, num_query, is_test, use_gt_labels):
+def get_image_paths(paths, random_labels, num_support, num_query, is_test, no_random_way, positive_label):
     support_images = []
     query_images = []
     extract_gt_label_pattern = re.compile(".*/(\d+)_(\d+).*")
@@ -37,13 +37,17 @@ def get_image_paths(paths, random_labels, num_support, num_query, is_test, use_g
             sampled_images = random.sample(np.arange(N).tolist(), num)
             for idx in sampled_images:
                 whole_path = "{}#{}".format(os.path.join(path, npy_path), idx)
-                if use_gt_labels:
+                if no_random_way:
                     ma = extract_gt_label_pattern.match(whole_path)
-                    gt_label = int(ma.group(2)) - 1
+                    gt_label = int(ma.group(2))
+                    if gt_label != 1:
+                        gt_label = 0
+                    else:
+                        positive_label = i
                     label_images.append((gt_label, whole_path))
                 else:
                     label_images.append((label, whole_path))
-    return support_images, query_images
+    return support_images, query_images, positive_label
 
 
 

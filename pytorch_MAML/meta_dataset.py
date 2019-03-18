@@ -1,7 +1,7 @@
 import json
 
 from torch.utils import data
-from config import IMAGE_SIZE, DATA_ROOT, CLASS_NUM
+from config import IMAGE_SIZE, DATA_ROOT, CLASS_NUM, LEAVE_ONE_OUT_DATA_ROOT, IN_CHANNELS
 import os
 import random
 from tensorflow_meta_SGD.utils import get_image_paths
@@ -35,7 +35,7 @@ class MetaTaskDataset(data.Dataset):
     """
 
     def __init__(self, num_tot_tasks, num_classes, num_support, num_query,
-                 dataset, is_train, pkl_task_dump_path, load_mode, split_data_protocol, no_random_way):
+                 dataset, is_train, pkl_task_dump_path, load_mode, split_data_protocol, no_random_way, leave_out_attack_dir=None):
         """
         Args:
             num_samples_per_class: num samples to generate "per class" in one batch
@@ -44,23 +44,31 @@ class MetaTaskDataset(data.Dataset):
         self.num_samples_per_class = num_support + num_query
         self.num_classes = num_classes  # e.g. 5-way
         self.img_size = IMAGE_SIZE[dataset]
-        self.dim_input = np.prod(self.img_size) * 3
+        self.dataset = dataset
+        self.dim_input = np.prod(self.img_size) * IN_CHANNELS[dataset]
         self.dim_output = self.num_classes
         self.train = is_train  # 区分训练集和测试集
         self.no_random_way =  no_random_way
         self.num_support = num_support
         self.num_query = num_query
+
         if split_data_protocol == SPLIT_DATA_PROTOCOL.TRAIN_I_TEST_II:
             train_sub_folder = "I"
             test_sub_folder = "II"
         elif split_data_protocol == SPLIT_DATA_PROTOCOL.TRAIN_II_TEST_I:
             train_sub_folder = "II"
             test_sub_folder = "I"
-        else:
+        elif split_data_protocol == SPLIT_DATA_PROTOCOL.TRAIN_ALL_TEST_ALL:
             train_sub_folder = "*"
             test_sub_folder = "*"
-        metatrain_folder = DATA_ROOT[dataset] + '/train/' + train_sub_folder
-        metaval_folder = DATA_ROOT[dataset] + "/test/" + test_sub_folder
+
+        root_folder = DATA_ROOT[dataset]
+        if leave_out_attack_dir is not None:
+            root_folder = leave_out_attack_dir
+            train_sub_folder = ""
+            test_sub_folder = ""
+        metatrain_folder = root_folder + '/train/' + train_sub_folder
+        metaval_folder = root_folder + "/test/" + test_sub_folder
 
         metatrain_folders = []
         metaval_folders = []
@@ -87,6 +95,7 @@ class MetaTaskDataset(data.Dataset):
         if is_train:
             self.store_data_per_task(load_mode, pkl_task_dump_path, train=True)
         else:
+
             self.store_data_per_task(load_mode, pkl_task_dump_path, train=False)  # test数据读取一定要random_sample = False
 
     def store_data_per_task(self, load_mode, pkl_task_dump_path, train=True):
@@ -100,7 +109,7 @@ class MetaTaskDataset(data.Dataset):
             folder_p = self.metatrain_folders_p
             folder_n = self.metatrain_folders_n
             num_total_batches = self.num_total_train_batches
-            if os.path.exists(pkl_task_dump_path):
+            if load_mode == LOAD_TASK_MODE.LOAD and os.path.exists(pkl_task_dump_path):
                 with open(pkl_task_dump_path, "rb") as file_obj:
                     self.train_tasks_data_classes = pickle.load(file_obj)
                 return
@@ -111,7 +120,7 @@ class MetaTaskDataset(data.Dataset):
             folder_p = self.metaval_folders_p
             folder_n = self.metaval_folders_n
             num_total_batches = self.num_total_val_batches
-            if os.path.exists(pkl_task_dump_path):
+            if load_mode == LOAD_TASK_MODE.LOAD and os.path.exists(pkl_task_dump_path):
                 with open(pkl_task_dump_path, "rb") as file_obj:
                     self.val_tasks_data_classes = pickle.load(file_obj)
                 return
@@ -133,8 +142,10 @@ class MetaTaskDataset(data.Dataset):
             # 为每一类sample出self.num_samples_per_class个样本
              # 从这一句可以看出, 每个task为task_folders随机安排的class id毫无规律可言. 所以no_random_way也是作用在这里
             # nb_samples = self.num_samples_per_class = support num + query num
-            supp_lbs_and_img_paths, query_lbs_and_img_paths = get_image_paths(task_folders, range(self.num_classes),
-                                                    self.num_support, self.num_query, is_test=not train, use_gt_labels=self.no_random_way) # task_folders包含正负样本的分布，但是具体support取几个，query取几个
+            supp_lbs_and_img_paths, query_lbs_and_img_paths, positive_label = get_image_paths(task_folders, range(self.num_classes),
+                                                        self.num_support, self.num_query, is_test=not train,
+                                        no_random_way=self.no_random_way,positive_label=positive_label) # task_folders包含正负样本的分布，但是具体support取几个，query取几个
+
             data_class_task = FilesPerTask(supp_lbs_and_img_paths, query_lbs_and_img_paths, i, positive_label)  # 第i个task的5-way的所有数据
             tasks_data_classes.append(data_class_task)
         self.dump_task(tasks_data_classes, pkl_task_dump_path)
@@ -171,9 +182,9 @@ class MetaTaskDataset(data.Dataset):
             image_idx = int(image_path[image_path.rindex("#")+1:])
             image_path = image_path[:image_path.rindex("#")]
             fobj = open(image_path, "rb")
-            im = np.memmap(fobj, dtype='float32', mode='r', shape=(1, 32, 32, 3), offset=image_idx * 32 * 32 * 3 * 32//8).copy()
+            im = np.memmap(fobj, dtype='float32', mode='r', shape=(1, IMAGE_SIZE[self.dataset][0], IMAGE_SIZE[self.dataset][1], IN_CHANNELS[self.dataset]), offset=image_idx * IMAGE_SIZE[self.dataset][0] * IMAGE_SIZE[self.dataset][1] * IN_CHANNELS[self.dataset] * 32//8).copy()
             fobj.close()
-            im = im.reshape(32,32,3)
+            im = im.reshape(IMAGE_SIZE[self.dataset][0],IMAGE_SIZE[self.dataset][1],IN_CHANNELS[self.dataset])
             im = np.transpose(im, axes=(2,0,1))
             im2 = im.reshape(self.dim_input)
             image_list.append(im2[np.newaxis, :]) # 加一个新的维度
@@ -190,9 +201,9 @@ class MetaTaskDataset(data.Dataset):
             image_idx = int(image_path[image_path.rindex("#") + 1:])
             image_path = image_path[:image_path.rindex("#")]
             fobj = open(image_path, "rb")
-            im = np.memmap(fobj, dtype='float32', mode='r', shape=(1, 32, 32, 3), offset=image_idx * 32 * 32 * 3 * 32//8).copy()
+            im = np.memmap(fobj, dtype='float32', mode='r', shape=(1, IMAGE_SIZE[self.dataset][0], IMAGE_SIZE[self.dataset][1], IN_CHANNELS[self.dataset]), offset=image_idx * IMAGE_SIZE[self.dataset][0] * IMAGE_SIZE[self.dataset][1] * IN_CHANNELS[self.dataset] * 32//8).copy()
             fobj.close()
-            im = im.reshape(32, 32, 3)
+            im = im.reshape(IMAGE_SIZE[self.dataset][0],IMAGE_SIZE[self.dataset][1],IN_CHANNELS[self.dataset])
             im = np.transpose(im, axes=(2, 0, 1))
             im2 = im.reshape(self.dim_input)
             image_list.append(im2[np.newaxis, :])

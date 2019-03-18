@@ -1,14 +1,14 @@
 import sys
 sys.path.append("/home1/machen/adv_detection_meta_learning")
+from collections import defaultdict
+from networks.conv3 import Conv3
+from pytorch_MAML.tensorboard_helper import TensorBoardWriter
 from dataset.deep_learning_adversary_dataset import AdversaryDataset
 import argparse
 import os
 import random
 import time
 import warnings
-from networks.resnet import resnet10, resnet18
-from networks.meta_network import MetaNetwork
-from networks.shallow_convs import FourConvs
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -18,8 +18,7 @@ import torch.utils.data
 from torch.utils.data import DataLoader
 import torch.utils.data.distributed
 import torchvision.models as models
-from dataset.presampled_task_dataset import TaskDatasetForDetector
-from config import IMAGE_SIZE, DATA_ROOT, IMAGE_DATA_ROOT
+from config import IMAGE_SIZE, IMAGE_DATA_ROOT
 import json
 from config import IN_CHANNELS, PY_ROOT
 from pytorch_MAML.meta_dataset import LOAD_TASK_MODE, SPLIT_DATA_PROTOCOL, MetaTaskDataset
@@ -30,12 +29,13 @@ import glob
 
 
 
+
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('-a', '--arch', type=str, default="resnet10", choices=["resnet10","conv4", "resnet18"])
+parser.add_argument('-a', '--arch', type=str, default="conv3", choices=["resnet10","conv3", "resnet18"])
 parser.add_argument('-j', '--workers', default=0, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=40, type=int, metavar='N',
@@ -69,7 +69,8 @@ parser.add_argument('--gpu', default=0, type=int,
                     help='GPU id to use.')
 parser.add_argument("--split_protocol", type=SPLIT_DATA_PROTOCOL,choices=list(SPLIT_DATA_PROTOCOL), help="split protocol of data")
 parser.add_argument("--num_updates", type=int, default=1, help="the number of inner updates")
-
+parser.add_argument("--test_pkl_path", type=str, default="",help="the train task txt file")
+parser.add_argument("--ablation_study_shot", action="store_true")
 best_acc1 = 0
 
 class Identity(nn.Module):
@@ -97,20 +98,26 @@ def main():
     if not args.evaluate:  # not evaluate
         # Simply call main_worker function
 
-        model_path = 'train_pytorch_model/DL_DET@{}_{}@{}@epoch_{}@class_{}@lr_{}.pth.tar'.format(
-            args.dataset, args.split_protocol, args.arch,
+        model_path = '{}/train_pytorch_model/DL_DET@{}_{}@{}@epoch_{}@class_{}@lr_{}.pth.tar'.format(
+            PY_ROOT, args.dataset, args.split_protocol, args.arch,
             args.epochs,
             2, args.lr)
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
         main_train_worker(args, model_path)
     else: # finetune evaluate
-        extract_pattern = re.compile(".*?traindata_(TRAIN_.*?_TEST_.*?)_(.*?)\.pth\.tar")
-        task_txt_folder = os.path.dirname(os.path.dirname(args.train_txt_path))
-        extract_pattern_detail = re.compile(".*?DL_DET@(.*?)_(TRAIN_.*?)@(.*?)@epoch_(\d+)@way_(\d+)@lr_(.*?)@batch_(\d+)@traindata_(.*?)tot_num_tasks_(\d+)_metabatch_(\d+)_way_(\d+)_shot_(\d+)_query_(\d+)\.pth\.tar")
-        extract_way_number = re.compile(".*?way_(\d+).*")
-        result = {}
+        extract_pattern = re.compile(".*?.*?_(TRAIN_.*?_TEST_.*?)@(.*?)\.pth\.tar")
+        # DL_DET@CIFAR-10_TRAIN_II_TEST_I@conv3@epoch_40@class_2@lr_0.0001.pth.tar
+
+        extract_pattern_detail = re.compile(".*?DL_DET@(.*?)_(TRAIN_.*?)@(.*?)@epoch_(\d+)@class_(\d+)@lr_(.*?)\.pth\.tar")
+        # /home1/machen/adv_detection_meta_learning/task/TRAIN_I_TEST_II/CIFAR-10/train_CIFAR-10_tot_num_tasks_20000_way_2_shot_1_query_15.pkl
+        extract_pkl = re.compile(".*?tot_num_tasks_(\d+)_way_(\d+)_shot_(\d+)_query_(\d+).*")
+        result = defaultdict(dict)
         for model_path in glob.glob("{}/train_pytorch_model/DL_DET@*".format(PY_ROOT)):
-            if "conv4" not in model_path:
+            if "conv3" not in model_path:  # FIXME
+                continue
+            if str(args.split_protocol) not in model_path:
+                continue
+            if "CIFAR-10" not in model_path:
                 continue
             print("evaluate model :{}".format(os.path.basename(model_path)))
             ma = extract_pattern.match(model_path)
@@ -118,66 +125,54 @@ def main():
             dataset_name = ma_d.group(1)
             split_data_protocol = SPLIT_DATA_PROTOCOL[ma_d.group(2)]
             arch = ma_d.group(3)
-            num_support = int(ma_d.group(12))
-            num_query = int(ma_d.group(13))
-            tot_num_tasks = int(ma_d.group(9))
-            lr = float(ma_d.group(6))
-            test_task_dump_path = task_txt_folder + "/{}/{}.pkl".format(ma.group(1), ma.group(2))
-            test_task_dump_path = test_task_dump_path.replace("train_", "test_")
-            extract_way_ma = extract_way_number.match(test_task_dump_path)
-            num_classes = int(extract_way_ma.group(1))
-            key = (ma.group(1), ma.group(2))
-            if num_support == 1:
-                continue #FIXME
-            meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
-                            dataset_name, is_train=False, load_mode=LOAD_TASK_MODE.LOAD,
-                            pkl_task_dump_path=test_task_dump_path, split_data_protocol=split_data_protocol)
-            data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False,pin_memory=True)
 
-            if arch == "conv4":
-                network = FourConvs(IN_CHANNELS[dataset_name], IMAGE_SIZE[dataset_name], 2)
-            elif arch == "resnet10":
-                network = resnet10(num_classes=2)
-            elif arch == "resnet18":
-                network = resnet18(num_classes=2)
-            model = MetaNetwork(network, IMAGE_SIZE[dataset_name])
+            lr = args.lr
+
+            if arch == "conv3":
+                network = Conv3(IN_CHANNELS[dataset_name],IMAGE_SIZE[dataset_name], 2)
+            model = network
             model = model.cuda()
             checkpoint = torch.load(model_path, map_location=lambda storage, location: storage)
             model.load_state_dict(checkpoint['state_dict'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(model_path, checkpoint['epoch']))
+            extract_pkl_ma = extract_pkl.match(args.test_pkl_path)
+            tot_num_tasks = int(extract_pkl_ma.group(1))
+            num_classes = int(extract_pkl_ma.group(2))
+            num_support = int(extract_pkl_ma.group(3))
+            num_query = int(extract_pkl_ma.group(4))
+            meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
+                                                dataset_name, is_train=False, pkl_task_dump_path=args.test_pkl_path,
+                                                load_mode=LOAD_TASK_MODE.LOAD,
+                                                split_data_protocol=split_data_protocol, no_random_way=True)
+            data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
             evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, args.num_updates)
-            result[key] = evaluate_result
-        with open(os.path.dirname(args.train_txt_path) + '/DL_DET_report.txt', "w") as file_obj:
-            file_obj.write(json.dumps(result))
-            file_obj.flush()
+            key = (ma.group(1), ma.group(2))
+            result[dataset_name][model_path] = evaluate_result
+            with open(os.path.dirname(args.test_pkl_path) + '/DL_DET_shot_{}_test_update_{}.json'.format(num_support, args.num_updates), "w") as file_obj:
+                file_obj.write(json.dumps(result))
+                file_obj.flush()
 
 def main_train_worker(args, model_path):
     global best_acc1
-    # create model
-    # if args.pretrained:
-    #     print("=> using pre-trained model '{}'".format(args.arch))
-    #     model = models.__dict__[args.arch](pretrained=True)
-    # else:
-    #     print("=> creating model '{}'".format(args.arch))
-    #     model = models.__dict__[args.arch]()
-    #
-    # if args.arch.startswith("resnet"):
-    #     model.avgpool = Identity()
-    #     model.fc = nn.Linear(512, 15)
-    # elif args.arch.startswith("vgg"):
-    #     model.classifier[6] = nn.Linear(4096, 15)
-    if args.arch == "conv4":
-        network = FourConvs(IN_CHANNELS[args.dataset], IMAGE_SIZE[args.dataset], 2)
-    elif args.arch == "resnet10":
-        network = resnet10(num_classes=2)
-    elif args.arch == "resnet18":
-        network = resnet18(num_classes=2)
-    model = MetaNetwork(network, IMAGE_SIZE[args.dataset])
+    if args.arch == "conv3":
+        network = Conv3(IN_CHANNELS[args.dataset],IMAGE_SIZE[args.dataset], 2)
+    model = network
+
+    # elif args.arch == "resnet10":
+    #     network = resnet10(num_classes=2)
+    # elif args.arch == "resnet18":
+    #     network = resnet18(num_classes=2)
+
     model = model.cuda()
     train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.arch), True, args.split_protocol)
-    val_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.arch), False,
-                                     args.split_protocol)
+    # val_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.arch), False,
+    #                                  args.split_protocol)
+
+    # val_dataset = MetaTaskDataset(20000, 2, 1, 15,
+    #                                     args.dataset, is_train=False, pkl_task_dump_path=args.test_pkl_path,
+    #                                     load_mode=LOAD_TASK_MODE.LOAD,
+    #                                     split_data_protocol=args.split_protocol, no_random_way=True)
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
@@ -186,18 +181,16 @@ def main_train_worker(args, model_path):
                                 weight_decay=args.weight_decay)
 
     # optionally resume from a checkpoint
-    if args.resume:
-        if os.path.isfile(args.resume):
-            print("=> loading checkpoint '{}'".format(args.resume))
-            checkpoint = torch.load(args.resume)
-            args.start_epoch = checkpoint['epoch']
-            best_acc1 = checkpoint['best_acc1']
-            model.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.resume, checkpoint['epoch']))
-        else:
-            print("=> no checkpoint found at '{}'".format(args.resume))
+    if os.path.exists(model_path):
+        print("=> loading checkpoint '{}'".format(model_path))
+        checkpoint = torch.load(model_path)
+        args.start_epoch = checkpoint['epoch']
+        model.load_state_dict(checkpoint['state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        print("=> loaded checkpoint '{}' (epoch {})"
+              .format(model_path, checkpoint['epoch']))
+    else:
+        print("=> no checkpoint found at '{}'".format(model_path))
 
     cudnn.benchmark = True
 
@@ -206,30 +199,28 @@ def main_train_worker(args, model_path):
         train_dataset, batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers, pin_memory=True)
 
-    val_loader = torch.utils.data.DataLoader(
-        val_dataset,
-        batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True)
-
+    # val_loader = torch.utils.data.DataLoader(
+    #     val_dataset,
+    #     batch_size=100, shuffle=False,
+    #     num_workers=0, pin_memory=True)
     for epoch in range(args.start_epoch, args.epochs):
         adjust_learning_rate(optimizer, epoch, args)
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        train(train_loader, None, model, criterion, optimizer, epoch, args)
         # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion, args)
+
+        # acc1 = validate(val_loader, model, criterion, args)
         # remember best acc@1 and save checkpoint
-        best_acc1 = max(acc1, best_acc1)
         save_checkpoint({
             'epoch': epoch + 1,
             'arch': args.arch,
             'state_dict': model.state_dict(),
-            'best_acc1': best_acc1,
             'optimizer': optimizer.state_dict(),
         }, filename=model_path)
 
 
 
-def train(train_loader, model, criterion, optimizer, epoch, args):
+def train(train_loader,val_loader, model, criterion, optimizer, epoch, args):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -238,7 +229,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
     # switch to train mode
     model.train()
-
+    tensorboard = TensorBoardWriter("{0}/pytorch_DeepLearning_tensorboard".format(PY_ROOT), "DeepLearning")
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
@@ -267,11 +258,22 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         if i % args.print_freq == 0:
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                   'Acc@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
                 epoch, i, len(train_loader), batch_time=batch_time,
-                data_time=data_time, loss=losses, top1=top1))
+                loss=losses, top1=top1, ))
+
+            # iter = epoch * len(train_loader) + i
+            # evaluate_result = finetune_eval_task_accuracy(model, val_loader, 0, 0, 1000)
+            # query_F1_tensor = torch.Tensor(1)
+            # query_F1_tensor.fill_(evaluate_result["query_F1"])
+            # tensorboard.record_val_query_F1(query_F1_tensor, iter)
+            # print('Epoch: [{0}][{1}/{2}]\t'
+            #       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+            #       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+            #       'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\tValQueryF1 {query_F1:.3f}'.format(
+            #     epoch, i, len(train_loader), batch_time=batch_time,
+            #     loss=losses, top1=top1, query_F1=evaluate_result["query_F1"]))
 
 
 def validate(val_loader, model, criterion, args):

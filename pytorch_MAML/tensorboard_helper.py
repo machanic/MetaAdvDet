@@ -1,8 +1,9 @@
 from tensorboardX import SummaryWriter
-
+import os
 class TensorBoardWriter(object):
 
     def __init__(self, folder, data_prefix):
+        os.makedirs(folder,exist_ok=True)
         self.writer = SummaryWriter(folder)
         self.export_json_path = folder + "/all_scalars.json"
         self.data_prefix = data_prefix

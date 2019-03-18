@@ -1,5 +1,5 @@
 import sys
-
+from collections import OrderedDict
 
 sys.path.append("/home1/machen/adv_detection_meta_learning")
 from networks.conv3 import Conv3
@@ -10,9 +10,9 @@ import random
 import time
 import warnings
 from networks.resnet import resnet10, resnet18
-from networks.shallow_convs import FourConvs
 import torch
 import torch.nn as nn
+from torch.nn import functional as F
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
@@ -40,10 +40,10 @@ model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('-a', '--arch', type=str, default="conv3", choices=model_names + ["resnet10", "conv3"])
+parser.add_argument('-a', '--arch', type=str, default="conv4", choices=model_names + ["resnet10", "conv4"])
 parser.add_argument('-j', '--workers', default=0, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
-parser.add_argument('--epochs', default=40, type=int, metavar='N',
+parser.add_argument('--epochs', default=30, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
@@ -74,6 +74,33 @@ parser.add_argument('--gpu', default=0, type=int,
                     help='GPU id to use.')
 
 best_acc1 = 0
+
+
+class LinearClassifier(nn.Module):
+    '''
+    The base model for few-shot learning on Omniglot
+    '''
+
+    def __init__(self, in_dim):
+        super(LinearClassifier, self).__init__()
+        # Define the network
+        self.in_dim = in_dim
+
+        self.fc = nn.Sequential(OrderedDict(
+            [('fc1', nn.Linear(in_dim, 128)),
+             ('relu1', nn.ReLU(inplace=True)),
+             ('fc2', nn.Linear(128, 128)),
+             ('relu2', nn.ReLU(inplace=True)),
+             ('fc2', nn.Linear(128, 2))]))
+
+        # Define loss function
+        self.loss_fn = nn.CrossEntropyLoss()
+        # Initialize weights
+        self._init_weights()
+
+    def forward(self, x, weights=None):
+        ''' Define what happens to data in the net '''
+        return self.fc(x)
 
 
 def main():
@@ -121,8 +148,8 @@ def main_train_worker(gpu, args):
             network = resnet10(num_classes=CLASS_NUM[args.dataset], in_channels=IN_CHANNELS[args.dataset])
         elif args.arch == "resnet18":
             network = resnet18(num_classes=CLASS_NUM[args.dataset], in_channels=IN_CHANNELS[args.dataset])
-        elif args.arch == "conv3":
-            network = Conv3(IN_CHANNELS[args.dataset], IMAGE_SIZE[args.dataset],CLASS_NUM[args.dataset])
+        elif args.arch == "conv4":
+            network = Conv3(CLASS_NUM[args.dataset], IMAGE_SIZE[args.dataset], IN_CHANNELS[args.dataset])
 
     if args.arch.startswith("resnet"):
         network.avgpool = Identity()
@@ -130,14 +157,13 @@ def main_train_worker(gpu, args):
     elif args.arch.startswith("vgg"):
         network.classifier[6] = nn.Linear(4096, CLASS_NUM[args.dataset])
 
-    model_path = './train_pytorch_model/DL_IMAGE_CLASSIFIER_{}@{}@epoch_{}@lr_{}@batch_{}.pth.tar'.format(
+    model_path = './train_pytorch_model/RCE_LOSS_{}@{}@epoch_{}@lr_{}@batch_{}.pth.tar'.format(
         args.dataset, args.arch, args.epochs, args.lr, args.batch_size)
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
     preprocessor = get_preprocessor(input_size=IMAGE_SIZE[args.dataset])
     network.cuda()
 
     # define loss function (criterion) and optimizer
-    image_classifier_loss = nn.CrossEntropyLoss().cuda()
 
     optimizer = torch.optim.SGD(network.parameters(), args.lr,
                                 momentum=args.momentum,
@@ -183,10 +209,10 @@ def main_train_worker(gpu, args):
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, network, image_classifier_loss, optimizer, epoch, args)
+        train(train_loader, network, CLASS_NUM[args.dataset], optimizer, epoch, args)
 
         # evaluate on validation set
-        acc1 = validate(val_loader, network, image_classifier_loss, args)
+        acc1 = validate(val_loader, network, CLASS_NUM[args.dataset], args)
 
         # remember best acc@1 and save checkpoint
 
@@ -199,12 +225,17 @@ def main_train_worker(gpu, args):
 
 
 
-def train(train_loader, model, criterion, optimizer, epoch, args):
+def train(train_loader, model, num_classes, optimizer, epoch, args):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
     # top5 = AverageMeter()
+
+    # xent = (tf.reduce_sum(self.labels * tf.log(tf.nn.softmax(logits)), axis=1) - tf.reduce_sum(
+    #     tf.log(tf.nn.softmax(logits)), axis=1)) / (self.hps.num_classes - 1)
+
+    #loss = - (self_predicted_prob_var * torch.log(prob + 1e-20)).sum(1)
 
     # switch to train mode
     model.train()
@@ -212,17 +243,24 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
+        index_target = target.clone().cuda()
+        one_hot = torch.zeros(target.size(0), num_classes)
+        one_hot.scatter_(1, target.view(-1,1), 1)
+        target = one_hot
         data_time.update(time.time() - end)
 
         input = input.cuda()
         target = target.cuda()
 
         # compute output
-        output = model(input)
-        loss = criterion(output, target)
+        logits = model(input)
+
+        loss = ((target * F.log_softmax(logits,dim=1)).sum(1) - F.log_softmax(logits,dim=1).sum(1)) / (num_classes - 1)
+        loss = loss.sum()
+        #loss = criterion(output, target)
 
         # measure accuracy and record loss
-        acc1,  = accuracy(output, target, topk=(1,))
+        acc1,  = accuracy(logits, index_target, topk=(1,))
         losses.update(loss.item(), input.size(0))
         top1.update(acc1[0], input.size(0))
         # top5.update(acc5[0], input.size(0))
@@ -246,7 +284,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
                 data_time=data_time, loss=losses, top1=top1))
 
 
-def validate(val_loader, model, criterion, args):
+def validate(val_loader, model, num_classes, args):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
@@ -259,12 +297,18 @@ def validate(val_loader, model, criterion, args):
         end = time.time()
         for i, (input, target) in enumerate(val_loader):
             input = input.cuda()
+            index_target = target.clone().cuda()
+            one_hot = torch.zeros(target.size(0), num_classes)
+            one_hot.scatter_(1, target.view(-1, 1), 1)
+            target = one_hot
             target = target.cuda()
             # compute output
             output = model(input)
-            loss = criterion(output, target)
+            loss = (target * F.log_softmax(output, dim=1)).sum(1) - F.log_softmax(output, dim=1).sum(1) / (
+                        num_classes - 1)
+            loss = loss.sum()
             # measure accuracy and record loss
-            acc1,  = accuracy(output, target, topk=(1, ))
+            acc1,  = accuracy(output, index_target, topk=(1, ))
             losses.update(loss.item(), input.size(0))
             top1.update(acc1[0], input.size(0))
             # top5.update(acc5[0], input.size(0))
@@ -319,7 +363,7 @@ def accuracy(output, target, topk=(1,)):
         maxk = max(topk)
         batch_size = target.size(0)
 
-        _, pred = output.topk(maxk, 1, True, True)
+        _, pred = output.topk(maxk, 1, largest=False, sorted=True)
         pred = pred.t()
         correct = pred.eq(target.view(1, -1).expand_as(pred))
 

@@ -41,14 +41,17 @@ def evaluate_two_way(net, x, target):
     accuracy = accuracy_score(target, predict)
     return accuracy, F1
 
-def evaluate(net, in_, target_Nway, target_positive, weights=None):
+def evaluate(net, in_, target_Nway, target_positive, weights=None, use_positive_position=True):
     # in_ is one task's 5-way k-shot data, in_ is either support data or query data
     in_ = in_.cuda()
     target_Nway = target_Nway.cuda()
     l, out = forward_pass(net, in_, target_Nway, weights)
     predict = np.argmax(out.detach().cpu().numpy(), axis=1)
     Nway_labels = target_Nway.detach().cpu().numpy()
-    two_way_accuracy, F1 = Nway_2way(predict, Nway_labels, target_positive.detach().cpu().numpy())
+    if use_positive_position:
+        two_way_accuracy, F1 = Nway_2way(predict, Nway_labels, target_positive.detach().cpu().numpy())
+    else:
+        two_way_accuracy, F1 = accuracy_score(Nway_labels, predict), f1_score(Nway_labels, predict)
     return two_way_accuracy, F1
 
 def get_net_predict(net, input):

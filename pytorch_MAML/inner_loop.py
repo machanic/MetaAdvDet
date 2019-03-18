@@ -19,14 +19,13 @@ class InnerLoop(nn.Module):
         self.num_updates = num_updates
         # Step size for the updates
         self.step_size = step_size
-        self.loss_fn = nn.CrossEntropyLoss(reduction="sum")
+        self.loss_fn = nn.CrossEntropyLoss()
         # for loss normalization 
         self.meta_batch_size = meta_batch_size
 
     def copy_weights(self, net):
         ''' Set this module's weights to be the same as those of 'net' '''
-        # TODO: breaks if nets are not identical
-        # TODO: won't copy buffers, e.g. for batch norm
+
         for m_from, m_to in zip(net.modules(), self.network.modules()):
             if isinstance(m_to, nn.Linear) or isinstance(m_to, nn.Conv2d) or isinstance(m_to, nn.BatchNorm2d):
                 m_to.weight.data = m_from.weight.data.clone()
@@ -48,7 +47,7 @@ class InnerLoop(nn.Module):
     def forward(self, in_support, in_query, target_support, target_query):
         in_support, in_query, target_support, target_query = in_support.detach(), in_query.detach(), target_support.detach(), target_query.detach()
         ##### Test net before training, should be random accuracy ####
-        fast_weights = OrderedDict((name, param) for (name, param) in self.named_parameters())
+        fast_weights = OrderedDict((name, param) for (name, param) in self.network.named_parameters())
         for i in range(self.num_updates):
             if i==0:
                 loss, _ = self.forward_pass(in_support, target_support)
@@ -60,14 +59,8 @@ class InnerLoop(nn.Module):
         ##### Test net after training, should be better than random ####
         # tr_post_loss, tr_post_acc, tr_post_two_acc = evaluate(self, in_support, target_support,positive_label, weights=fast_weights)
         # val_post_loss, val_post_acc, val_post_two_acc = evaluate(self, in_query, target_query,positive_label, weights=fast_weights)
-        # print('Train Inner step Loss pre:{} post:{}'.format(tr_pre_loss, tr_post_loss))
-        # print('Train Inner step Acc pre:{} post:{}'.format(tr_pre_acc, tr_post_acc))
-        # print('Train Inner step 2-Acc pre:{} post:{}'.format(tr_pre_two_acc, tr_post_two_acc))
-        # print('Val Inner step Loss pre:{} post:{}'.format(val_pre_loss, val_post_loss))
-        # print('Val Inner step Acc pre:{} post:{}'.format(val_pre_acc, val_post_acc))
-        # print('Val Inner step 2-Acc pre:{} post:{}'.format(val_pre_two_acc, tr_post_two_acc))
         # Compute the meta gradient and return it
-        loss,_ = self.forward_pass(in_query, target_query, fast_weights)   #
+        loss, _ = self.forward_pass(in_query, target_query, fast_weights)   #
         loss = loss / self.meta_batch_size # normalize loss
         grads = torch.autograd.grad(loss, self.parameters())
         meta_grads = {name:g for ((name, _), g) in zip(self.named_parameters(), grads)}
