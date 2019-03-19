@@ -67,7 +67,7 @@ class MetaLearner(object):
             os.makedirs(task_dump_path, exist_ok=True)
             trn_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
                                           dataset_name, is_train=True, load_mode=load_task_mode,
-                                          pkl_task_dump_path=train_task_dump_path, split_data_protocol=split_data_protocol,
+                                          pkl_task_dump_path=train_task_dump_path, protocol=split_data_protocol,
                                           no_random_way=no_random_way, leave_out_attack_dir=leave_out_attack_dir)
             self.train_loader = DataLoader(trn_dataset, batch_size=meta_batch_size, shuffle=True, num_workers=0, pin_memory=True)
             self.tensorboard = TensorBoardWriter("{0}/pytorch_MAML_tensorboard".format(PY_ROOT),
@@ -86,7 +86,7 @@ class MetaLearner(object):
                                                                                                num_classes,num_support,num_query)
         val_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
                                       dataset_name, is_train=False, load_mode=load_task_mode,
-                                      pkl_task_dump_path=test_task_dump_path, split_data_protocol=split_data_protocol,
+                                      pkl_task_dump_path=test_task_dump_path, protocol=split_data_protocol,
                                       no_random_way=no_random_way, leave_out_attack_dir=leave_out_attack_dir)
         print("using {} to evaluate F1 score".format(test_task_dump_path))
         self.val_loader = DataLoader(val_dataset, batch_size=100, shuffle=False, num_workers=0, pin_memory=True) # 固定100个task，分别测每个task的准确率

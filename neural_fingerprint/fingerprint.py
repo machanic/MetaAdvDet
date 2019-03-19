@@ -33,10 +33,12 @@ class Stats:
         self.ids_correct_fp = set()
         self.ids_agree = set()
 
-        self.TP = 0
-        self.FP = 0
-        self.FN = 0
-        self.TN = 0
+        self.TP = set()
+        self.P =set()
+        self.N = set()
+        self.FP = set()
+        self.FN = set()
+        self.TN = set()
 
         # Legal = there is a fingerprint match below threshold tau
         self.ids_legal = set()
@@ -57,16 +59,27 @@ class Stats:
         l = self.ids_legal
         a = self.ids_agree
         aa = set.intersection(
-            self.ids_correct, self.ids_correct_fp)  # ground truth == predict label == px predict label
-
+            self.ids_correct, self.ids_correct_fp)
+        TP = self.TP
+        FP = self.FP
         if ids_correct: # use to only look at examples in ids_correct, i.e. the ones where f(x) was correct for test x.
-            i = set.intersection(i, ids_correct)
+            i = set.intersection(i, ids_correct) # ids_correct表示原始model f(x)就能预测正确的
             c = set.intersection(c, ids_correct)
             c_fp = set.intersection(c_fp, ids_correct)
-            l = set.intersection(l, ids_correct)
+            l = set.intersection(l, ids_correct)  # 合法的
             a = set.intersection(a, ids_correct)
             aa = set.intersection(aa, ids_correct)
-
+            TP = set.intersection(TP, ids_correct)
+            FP = set.intersection(FP, ids_correct)
+        precision = 0.0
+        if float(len(TP) + len(FP)) > 0.0:
+            precision = len(TP) / float(len(TP) + len(FP))
+        recall = 0.0
+        if len(self.P) > 0:
+            recall = len(TP) / float(len(self.P))
+        F1 = 0.0
+        if precision + recall > 0.0:
+            F1 = 2 * precision * recall / (precision + recall)
         # Reject if not legal: model output does not match any fingerprint at threshold tau.
         # when does argmax f(x) == argmax f(x+dx)
         # when does y* == argmax f(x) == argmax f(x+dx)
@@ -75,7 +88,7 @@ class Stats:
                 "num_correct_fp" : len(c_fp),
                 "num_legal" : len(l),
                 "num_reject" : len(i) - len(l),
-                "num_agree" : len(a),
+                "num_agree" : len(a), "F1":F1,
                 "num_all_agree" : len(aa)}
 
     def show(self, d):

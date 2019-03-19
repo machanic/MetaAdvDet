@@ -17,8 +17,8 @@ class NeuralFingerprintDetector(object):
         self.dataset = dataset
         self.model = model
         self.num_class = num_class
-        self.dx_path = out_fp_dxdy_dir + '/fp_inputs_dx@{}.pkl'.format(dataset)
-        self.dy_path = out_fp_dxdy_dir + '/fp_outputs_dy@{}.pkl'.format(dataset)
+        self.dx_path = out_fp_dxdy_dir + '/fp_inputs_dx@num_dx_{}@{}.pkl'.format(num_dx, dataset)
+        self.dy_path = out_fp_dxdy_dir + '/fp_outputs_dy@num_dx_{}@{}.pkl'.format(num_dx, dataset)
         self.num_dx = num_dx
         if os.path.exists(self.dx_path) and os.path.exists(self.dy_path):
             print("loading dx and dy from {} and {}".format(self.dx_path, self.dy_path))
@@ -113,6 +113,8 @@ class NeuralFingerprintDetector(object):
         self.model.eval()
         test_loss = 0
         correct = 0
+        correct_fp = 0
+        fingerprint_accuracy = []
         loss_y = 0
         loss_dy = 0
         num_same_argmax = 0
@@ -139,14 +141,14 @@ class NeuralFingerprintDetector(object):
                     loss_dy += 10.0 * self.loss_n(diff, fp_target_var_i)
                     num_same_argmax += torch.sum(diff_class == fp_target_class)
                 test_loss += F.nll_loss(output, target, size_average=False).item()  # sum up batch loss
-                pred = output.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
-                correct += pred.eq(target.data.view_as(pred)).detach().cpu().sum()
+                pred = output.max(1, keepdim=True)[1]  # get the index of the max log-probability
+                correct += pred.eq(target.view_as(pred)).detach().cpu().sum()
         if test_length is None:
             test_length = len(data_loader.dataset)
         test_loss /= test_length
         loss_y /= test_length
         loss_dy /= test_length
-        argmax_acc = num_same_argmax.item() * 1.0 / (test_length * self.num_dx)
+        argmax_acc = num_same_argmax * 1.0 / (test_length * self.num_dx)
         print('Test set: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)'.format(
             test_loss, correct, test_length,
             100. * correct / test_length))
@@ -165,32 +167,8 @@ class NeuralFingerprintDetector(object):
                   }
         return result
 
-    def get_pr_wrapper(self, results, pos_names, neg_names, reject_thresholds, args):
 
-        for e, _type in enumerate(["raw", "cond_correct"]):
 
-            pr_results = {}
-
-            for tau in reject_thresholds:
-
-                tmp_results = {k: v[tau][e] for k, v in results.items()}
-
-            pr_auc = get_pr_auc(pr_results, args, plot=True,
-                                plot_name="{}-{}-{}".format(_type, "-".join(pos_names), "-".join(neg_names)))
-
-            print(pos_names, neg_names, _type, "{}: AUC ROC {} PR {}".format(_type, roc_auc, pr_auc))
-
-            pr_results["pr_auc"] = pr_auc
-
-            # print("count stats")
-            # for k,v in pr_results.items():
-            #     print(k,v)
-
-            path = os.path.join(args.log_dir,
-                                "rates-roc-pr-auc_{}_{}_{}_tau_{:.4f}.pkl".format(_type, "-".join(pos_names),
-                                                                                  "-".join(neg_names), tau))
-            print("Saving pr result in", path)
-            pickle.dump(pr_results, open(path, "wb"))
 
 
     def model_with_fingerprint(self, model, x, fp):
@@ -228,13 +206,13 @@ class NeuralFingerprintDetector(object):
         diff_logits_p = logits_p_norm - logits_norm
         # diff_logits_p = diff_logits_p * torch.norm(diff_logits_p, 2, 1, keepdim=True).reciprocal().expand(args.num_dx, args.num_class)
 
-        diff = fixed_dys - diff_logits_p
+        diff = fixed_dys - diff_logits_p # 论文公式9
 
         diff_norm = torch.norm(diff, 2, dim=2)
 
-        diff_norm = torch.mean(diff_norm, dim=1)
+        diff_norm = torch.mean(diff_norm, dim=1)  #论文公式9求均值
 
-        y_class_with_fp = diff_norm.min(0, keepdim=True)[1]
+        y_class_with_fp = diff_norm.min(0, keepdim=True)[1] #差距最小的那个logit的位置
         y_class_with_fp = y_class_with_fp.detach().cpu().numpy()[0]
 
         ex = Example(x, yhat, y_class)
@@ -255,36 +233,30 @@ class NeuralFingerprintDetector(object):
             stats.ids.add(ex.id)
             # Check legal: ? D({f(x+dx)}, {y^k}) < tau for all classes k.
             below_threshold = diff_norm < reject_threshold
-            below_threshold_t = below_threshold[y_class_with_fp]  # 寻找diff向量中小于阈值的卡住，最小的元素对应的值是多少
-            below_threshold_t = below_threshold_t.detach().cpu()
-            is_legal = below_threshold_t.item() > 0
+            below_threshold_t = below_threshold[y_class_with_fp].item()
+
+            is_legal = below_threshold_t > 0
             ex.is_legal = is_legal
 
-            if ex.is_legal:
-                stats.ids_legal.add(ex.id)
-
-            if ex.y == ex.y_class:  # ex.y is ground truth, 1 real image, 0 adv image
+            if ex.y == ex.y_class:  # y是gt label  y_class模型f(x)输出
                 stats.ids_correct.add(ex.id)
 
-
-            if ex.y == ex.y_class_with_fp: # ex.y is ground truth
+            if ex.y == ex.y_class_with_fp:
                 stats.ids_correct_fp.add(ex.id)
 
             if ex.y_class == ex.y_class_with_fp:
                 stats.ids_agree.add(ex.id)
-                if ex.y == 1 and ex.is_legal:
-                    stats.TP += 1
-                elif ex.y == 0 and ex.is_legal:
-                    stats.FP += 1
-            else:  # predict as adv = 0
-                if ex.y == 1 and ex.is_legal:
-                    stats.FN += 1
-                elif ex.y == 0 and ex.is_legal:
-                    stats.TN += 1
 
-
-
-
+            if ex.binary_y == 1:
+                stats.P.add(ex.id)
+            else:
+                stats.N.add(ex.id)
+            if is_legal and ex.binary_y == 1:
+                stats.TP.add(ex.id)
+            if is_legal and ex.binary_y == 0:
+                stats.FP.add(ex.id)
+            if ex.is_legal:
+                stats.ids_legal.add(ex.id)
 
         return ex, stats_per_tau
 
@@ -301,6 +273,7 @@ class NeuralFingerprintDetector(object):
                 # Careful! Needs Dataloader with shuffle=False
                 ex.id = i
                 ex.y = y[b]
+
                 ex, stats_per_tau = self.detect_with_fingerprints(ex, stats_per_tau)
                 i += 1
                 if self.verbose:
@@ -311,19 +284,19 @@ class NeuralFingerprintDetector(object):
                                                                                       ex.diff_norm.detach().cpu().numpy()))
             if e % 10 == 0:
                 print("Ex: {} batch {} of size {}".format(i, e, real_bs))
-            if e >= 0:
-                break
+
         results = defaultdict(lambda: None)
         stats_results = defaultdict(lambda: None)
 
         for tau, stats in stats_per_tau.items():
-            stats.counts = stats.compute_counts()
+            stats.counts = stats.compute_counts()  # 这个字典里的num_correct_fp就是预测正确的个数
             # use test x for which f(x) was correct. If the current dataset is not test, we need an external set of ids.
             if test_results_by_tau:
                 ids_correct = test_results_by_tau[tau].ids_correct
             else:
                 continue
             stats.counts_correct = stats.compute_counts(ids_correct=ids_correct)
+
             if self.verbose:
                 print("Stats raw (tau {})".format(tau))
                 stats.show(stats.counts)
@@ -333,51 +306,49 @@ class NeuralFingerprintDetector(object):
             stats_results[tau] = stats
         return results, stats_results
 
-    def eval_with_fingerprints_finetune(self, val_loader, ds_name, reject_thresholds, test_results_by_tau, num_updates, lr):
+
+
+    def eval_with_fingerprints_finetune(self, val_loader, ds_name, reject_thresholds, num_updates, lr):
         test_net = copy.deepcopy(self.model)
-        stats_per_tau = {i: Stats(tau=i, name=ds_name, ds_name=ds_name) for i in reject_thresholds}
+        stats_per_tau = {thresh: Stats(tau=thresh, name=ds_name, ds_name=ds_name) for thresh in reject_thresholds}
         i = 0
         all_F1_scores = []
-        all_accuracys = []
         all_tau = []
-        for support_images, support_labels, query_images, query_labels, positive_labels in val_loader:
-
-            positive_labels = positive_labels.detach().cpu().numpy()
-            support_labels = support_labels.detach().cpu().numpy()
-            query_labels = query_labels.detach().cpu().numpy()
-            support_labels = (support_labels == positive_labels).astype(np.int64)
-            query_labels = (query_labels == positive_labels).astype(np.int64)
+        # 注意这个val_loader要特别定制化
+        for support_images,support_gt_labels, support_binary_labels, query_images, query_gt_labels, query_binary_labels,_ in val_loader:
+            support_binary_labels = support_binary_labels.detach().cpu().numpy()
+            support_gt_labels = support_gt_labels.cuda()
             support_images = support_images.cuda()
             query_images = query_images.cuda()
-            support_labels = torch.from_numpy(support_labels).cuda()
-            query_labels = torch.from_numpy(query_labels).cuda()
-
             for task_idx in range(support_images.size(0)):
+                clean_support_index = np.where(support_binary_labels[task_idx] == 1)[0]
+                clean_imgs = support_images[task_idx][clean_support_index]
+                clean_labels = support_gt_labels[task_idx][clean_support_index]  # support label 需要传入干净图 的真正label，而不是0/1
                 test_net.copy_weights(self.model)
-                optimizer = optim.Adam(test_net.parameters(), lr=lr)
-                x = support_images[task_idx]  # FIXME finetune应该只用干净的图片来fine-tune
-                y = support_labels[task_idx]
-                batch_size = x.size(0)
-                x = x.view(batch_size, IN_CHANNELS[ds_name], IMAGE_SIZE[ds_name][0], IMAGE_SIZE[ds_name][1])
+                for m in test_net.modules():
+                    if isinstance(m, torch.nn.BatchNorm2d):
+                        m.eval()  # BN层会出问题，不要训练
+                optimizer = optim.SGD(test_net.parameters(), lr=lr)
+                batch_size = clean_imgs.size(0)
+                clean_imgs = clean_imgs.view(batch_size, IN_CHANNELS[ds_name], IMAGE_SIZE[ds_name][0], IMAGE_SIZE[ds_name][1])
                 for _ in range(num_updates):  # 先fine_tune
-                    loss, _, _, _ = self.train_one_image(test_net, x,y, optimizer, 1)
+                    self.train_one_image(test_net, clean_imgs, clean_labels, optimizer, 1)
+
                 test_net.eval()
-                x, y = query_images[task_idx], query_labels[task_idx]
+                x, y = query_images[task_idx], query_gt_labels[task_idx]  # 注意这个分类信息是img gt label
+                binary_y = query_binary_labels[task_idx]
                 batch_size = x.size(0)
                 x = x.view(batch_size, IN_CHANNELS[ds_name], IMAGE_SIZE[ds_name][0], IMAGE_SIZE[ds_name][1])
 
                 data_np = x.detach().cpu().numpy()
                 real_bs = data_np.shape[0]
-                predict_label_list = []
-                gt_label_list = []
 
                 for b in range(real_bs):
                     ex = self.model_with_fingerprint(test_net, x[b:b + 1], self.fp)
                     # Careful! Needs Dataloader with shuffle=False
                     ex.id = i
                     ex.y = y[b].item() # ground truth of real image : 1 , adversarial image 0
-                    gt_label_list.append(ex.y)
-
+                    ex.binary_y = binary_y[b].item()
                     ex, stats_per_tau = self.detect_with_fingerprints(ex, stats_per_tau)
                     i += 1
 
@@ -386,32 +357,20 @@ class NeuralFingerprintDetector(object):
 
                 result = {}
                 for tau, stats in stats_per_tau.items():
-                    precision_tau = 0
-                    recall_tau = 0
-                    accuracy_tau = 0
-                    F1_score_tau = 0
-                    if stats.TP + stats.FP != 0:
-                        precision_tau = stats.TP / float(stats.TP + stats.FP)
-                    if stats.TP + stats.FN != 0:
-                        recall_tau = stats.TP / float(stats.TP + stats.FN)
-                    if stats.TP + stats.TN + stats.FP + stats.FN != 0:
-                        accuracy_tau = (stats.TP + stats.TN) /float(stats.TP + stats.TN + stats.FP + stats.FN)
-                    if precision_tau + recall_tau != 0:
-                        F1_score_tau = 2 * precision_tau * recall_tau / (precision_tau + recall_tau)
-                    result[tau] = (accuracy_tau, F1_score_tau)
+                    stats.counts = stats.compute_counts()
+                    ids_correct = stats.ids_correct
+                    F1 = stats.compute_counts(ids_correct=ids_correct)["F1"]
+                    result[tau] = F1
 
-                best_F1 = max(list(result.values()), key=lambda e:e[1])[1]
-                best_acc = max(list(result.values()), key=lambda e:e[0])[0]
-                best_tau = max(list(result.items()), key=lambda e:e[1][0])[0]
-                all_accuracys.append(best_acc)
+                best_F1 = max(list(result.values()))
+                best_tau = max(list(result.items()), key=lambda e:e[1])[0]
                 all_F1_scores.append(best_F1)
                 all_tau.append(best_tau)
                 stats_per_tau.clear()
-                for i in reject_thresholds:
-                    stats_per_tau[i] = Stats(tau=i, name=ds_name, ds_name=ds_name)
-            print("process 100 task done, current last task's acc:{} F1:{}".format(best_acc, best_F1))
-        accuracy = np.mean(all_accuracys)
+                for thresh in reject_thresholds:
+                    stats_per_tau[thresh] = Stats(tau=thresh, name=ds_name, ds_name=ds_name)
         F1 = np.mean(all_F1_scores)
-        tau = np.mean(best_tau)
-        print("final accuracy: {},  F1: {}  tau:{}".format(accuracy, F1, tau))
-        return accuracy, F1
+        tau = np.mean(all_tau)
+        del test_net
+        print("final   F1: {}  tau:{}".format( F1, tau))
+        return F1

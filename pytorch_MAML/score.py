@@ -34,7 +34,8 @@ def forward_pass(net, in_, target, weights=None):
 def evaluate_two_way(net, x, target):
     x = x.cuda()
     target = target.cuda()
-    _, out = forward_pass(net, x, target)
+    with torch.no_grad():
+        _, out = forward_pass(net, x, target)
     predict = np.argmax(out.detach().cpu().numpy(), axis=1)
     target = target.detach().cpu().numpy()
     F1 = f1_score(target, predict)

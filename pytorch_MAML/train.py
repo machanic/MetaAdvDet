@@ -110,7 +110,7 @@ def main():
                       .format(model_path, checkpoint['epoch']))
 
             learner.train(model_path, resume_epoch)
-    else:
+    else: # 测试模式
         # MAML@CIFAR-10_TRAIN_I_TEST_II@conv4@epoch_40@meta_batch_size_10@way_2@shot_1@num_query_15@num_updates_2@lr_0.001@inner_lr_0.01.pth.tar
         if args.study_subject != "leave_one_out_study":
             ablation_study_evaluate(args)

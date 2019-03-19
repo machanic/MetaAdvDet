@@ -40,10 +40,10 @@ model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
                      and callable(models.__dict__[name]))
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('-a', '--arch', type=str, default="conv4", choices=model_names + ["resnet10", "conv4"])
+parser.add_argument('-a', '--arch', type=str, default="conv3", choices=model_names + ["resnet10", "conv3"])
 parser.add_argument('-j', '--workers', default=0, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
-parser.add_argument('--epochs', default=30, type=int, metavar='N',
+parser.add_argument('--epochs', default=20, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
@@ -75,32 +75,6 @@ parser.add_argument('--gpu', default=0, type=int,
 
 best_acc1 = 0
 
-
-class LinearClassifier(nn.Module):
-    '''
-    The base model for few-shot learning on Omniglot
-    '''
-
-    def __init__(self, in_dim):
-        super(LinearClassifier, self).__init__()
-        # Define the network
-        self.in_dim = in_dim
-
-        self.fc = nn.Sequential(OrderedDict(
-            [('fc1', nn.Linear(in_dim, 128)),
-             ('relu1', nn.ReLU(inplace=True)),
-             ('fc2', nn.Linear(128, 128)),
-             ('relu2', nn.ReLU(inplace=True)),
-             ('fc2', nn.Linear(128, 2))]))
-
-        # Define loss function
-        self.loss_fn = nn.CrossEntropyLoss()
-        # Initialize weights
-        self._init_weights()
-
-    def forward(self, x, weights=None):
-        ''' Define what happens to data in the net '''
-        return self.fc(x)
 
 
 def main():
@@ -148,8 +122,8 @@ def main_train_worker(gpu, args):
             network = resnet10(num_classes=CLASS_NUM[args.dataset], in_channels=IN_CHANNELS[args.dataset])
         elif args.arch == "resnet18":
             network = resnet18(num_classes=CLASS_NUM[args.dataset], in_channels=IN_CHANNELS[args.dataset])
-        elif args.arch == "conv4":
-            network = Conv3(CLASS_NUM[args.dataset], IMAGE_SIZE[args.dataset], IN_CHANNELS[args.dataset])
+        elif args.arch == "conv3":
+            network = Conv3(IN_CHANNELS[args.dataset], IMAGE_SIZE[args.dataset], CLASS_NUM[args.dataset])
 
     if args.arch.startswith("resnet"):
         network.avgpool = Identity()

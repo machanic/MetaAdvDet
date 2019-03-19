@@ -121,6 +121,7 @@ def test_for_task_accuracy(args):
         ma = extract_pattern_detail.match(model_path)
         ma_d = extract_pattern_data.match(model_path)
         dataset = ma.group(1)
+
         arch = ma.group(2)
         epoch = int(ma.group(3))
         lr = float(ma.group(4))
@@ -144,7 +145,7 @@ def test_for_task_accuracy(args):
         meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
                                             dataset, is_train=False, load_mode=LOAD_TASK_MODE.LOAD,
                                             pkl_task_dump_path=test_data_pkl_file_name,
-                                            split_data_protocol=train_test_protocol,no_random_way=True)
+                                            protocol=train_test_protocol, no_random_way=True)
         data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
 
         if arch == "resnet10":
@@ -202,7 +203,7 @@ def main_train_worker(args):
         ma = extract_info_pattern.match(img_classifier_model_path)
         dataset, arch  = ma.group(1), ma.group(2)
         if args.protocol != SPLIT_DATA_PROTOCOL.TRAIN_ALL_TEST_ALL:
-            if dataset != "CIFAR-10":
+            if dataset == "CIFAR-10":
                 continue
         fix_str = "no_fix_cnn_params"
         if args.fix_cnn:

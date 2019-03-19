@@ -136,8 +136,8 @@ def main():
             if num_support == 1:
                 continue #FIXME
             meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
-                            dataset_name, is_train=False, load_mode=LOAD_TASK_MODE.LOAD,
-                            pkl_task_dump_path=test_task_dump_path, split_data_protocol=split_data_protocol)
+                                                dataset_name, is_train=False, load_mode=LOAD_TASK_MODE.LOAD,
+                                                pkl_task_dump_path=test_task_dump_path, protocol=split_data_protocol)
             data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False,pin_memory=True)
 
             if arch == "conv4":

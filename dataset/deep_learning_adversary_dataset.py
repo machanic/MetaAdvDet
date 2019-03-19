@@ -5,12 +5,12 @@ import glob
 import re
 import numpy as np
 import os
-from config import META_ATTACKER_PART_II, META_ATTACKER_PART_I
+
 
 from pytorch_MAML.meta_dataset import SPLIT_DATA_PROTOCOL
 
 class AdversaryDataset(data.Dataset):
-    def __init__(self, root_path, train, protocol):
+    def __init__(self, root_path, train, protocol, META_ATTACKER_PART_I, META_ATTACKER_PART_II):
         self.root_path = root_path
         filter_str = "train"
         if not train:

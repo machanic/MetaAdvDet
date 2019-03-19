@@ -90,7 +90,7 @@ def main():
             meta_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
                                            dataset, is_train=False, load_mode=LOAD_TASK_MODE.LOAD,
                                            pkl_task_dump_path=pkl_task_file_name,
-                                           split_data_protocol=args.split_data_protocol)
+                                           protocol=args.split_data_protocol)
             val_loader = DataLoader(meta_dataset, batch_size=args.batch_size, shuffle=False)
 
             # train_imgs = get_train_data(train_dataset)

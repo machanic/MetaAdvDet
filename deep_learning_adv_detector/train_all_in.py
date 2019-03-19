@@ -1,5 +1,7 @@
 import sys
+
 sys.path.append("/home1/machen/adv_detection_meta_learning")
+
 from collections import defaultdict
 from networks.conv3 import Conv3
 from pytorch_MAML.tensorboard_helper import TensorBoardWriter
@@ -18,14 +20,18 @@ import torch.utils.data
 from torch.utils.data import DataLoader
 import torch.utils.data.distributed
 import torchvision.models as models
-from config import IMAGE_SIZE, IMAGE_DATA_ROOT
+from config import IMAGE_SIZE, IMAGE_DATA_ROOT, LEAVE_ONE_OUT_DATA_ROOT
+import config
+
 import json
 from config import IN_CHANNELS, PY_ROOT
 from pytorch_MAML.meta_dataset import LOAD_TASK_MODE, SPLIT_DATA_PROTOCOL, MetaTaskDataset
+from dataset.task_dataset_for_finetune import TaskDatasetForFinetune
+
 import re
 from pytorch_MAML.evaluate import finetune_eval_task_accuracy
 import glob
-
+import multiprocessing as mp
 
 
 
@@ -90,34 +96,61 @@ def main():
                       'which can slow down your training considerably! '
                       'You may see unexpected behavior when restarting '
                       'from checkpoints.')
-    if args.gpu is not None:
-        print("Use GPU: {} for training".format(args.gpu))
-        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-        os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
+
 
     if not args.evaluate:  # not evaluate
         # Simply call main_worker function
+        if args.split_protocol == SPLIT_DATA_PROTOCOL.LEAVE_ONE_FOR_TEST: # 训练leave_one_out协议
 
-        model_path = '{}/train_pytorch_model/DL_DET@{}_{}@{}@epoch_{}@class_{}@lr_{}.pth.tar'.format(
-            PY_ROOT, args.dataset, args.split_protocol, args.arch,
-            args.epochs,
-            2, args.lr)
-        os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        main_train_worker(args, model_path)
+            all_adversaries = config.META_ATTACKER_PART_I + config.META_ATTACKER_PART_II
+            all_adversaries = list(set(all_adversaries))
+            all_adversaries.remove("clean")
+            args.split_protocol = SPLIT_DATA_PROTOCOL.TRAIN_I_TEST_II
+            pool = mp.Pool(processes=15)
+            for idx, leave_adversary in enumerate(all_adversaries):
+                config.META_ATTACKER_PART_I.clear()
+                config.META_ATTACKER_PART_II.clear()
+                for adversary in all_adversaries:
+                    if leave_adversary != adversary:
+                        config.META_ATTACKER_PART_I.append(adversary)
+                config.META_ATTACKER_PART_II.append(leave_adversary)
+                config.META_ATTACKER_PART_I.append("clean")
+                config.META_ATTACKER_PART_II.append("clean")
+                attack_name = leave_adversary
+
+                param_prefix = "{}@leave_{}@{}@epoch_{}@batch_size_{}@lr_{}".format(
+                    args.dataset,
+                    attack_name, args.arch, args.epochs, args.batch_size, args.lr)
+                model_path = '{}/train_pytorch_model/DL_DET/LeaveOneOut/DL_DET@{}.pth.tar'.format(
+                    PY_ROOT,
+                    param_prefix)
+                os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                gpus = ["0", "2","5","6","8"]
+                args.gpu = gpus[idx%len(gpus)]
+                print("using GPU:{}".format(args.gpu))
+                print("Test adv: {}".format(leave_adversary))
+                # main_train_worker(args, model_path, config)
+                pool.apply_async(main_train_worker, args=(args, model_path, config.META_ATTACKER_PART_I, config.META_ATTACKER_PART_II,args.gpu))
+            pool.close()
+            pool.join()
+        else:
+            model_path = '{}/train_pytorch_model/DL_DET/DL_DET@{}_{}@{}@epoch_{}@class_{}@lr_{}.pth.tar'.format(
+                PY_ROOT, args.dataset, args.split_protocol, args.arch,
+                args.epochs,
+                2, args.lr)
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            main_train_worker(args, model_path,gpu=args.gpu)
+
     else: # finetune evaluate
         extract_pattern = re.compile(".*?.*?_(TRAIN_.*?_TEST_.*?)@(.*?)\.pth\.tar")
         # DL_DET@CIFAR-10_TRAIN_II_TEST_I@conv3@epoch_40@class_2@lr_0.0001.pth.tar
 
         extract_pattern_detail = re.compile(".*?DL_DET@(.*?)_(TRAIN_.*?)@(.*?)@epoch_(\d+)@class_(\d+)@lr_(.*?)\.pth\.tar")
         # /home1/machen/adv_detection_meta_learning/task/TRAIN_I_TEST_II/CIFAR-10/train_CIFAR-10_tot_num_tasks_20000_way_2_shot_1_query_15.pkl
-        extract_pkl = re.compile(".*?tot_num_tasks_(\d+)_way_(\d+)_shot_(\d+)_query_(\d+).*")
+        extract_pkl = re.compile(".*?tot_num_tasks_(\d+)_way_(\d+)_shot_(.*?)_query_(\d+).*")
         result = defaultdict(dict)
-        for model_path in glob.glob("{}/train_pytorch_model/DL_DET@*".format(PY_ROOT)):
-            if "conv3" not in model_path:  # FIXME
-                continue
+        for model_path in glob.glob("{}/train_pytorch_model/DL_DET/DL_DET@*".format(PY_ROOT)):
             if str(args.split_protocol) not in model_path:
-                continue
-            if "CIFAR-10" not in model_path:
                 continue
             print("evaluate model :{}".format(os.path.basename(model_path)))
             ma = extract_pattern.match(model_path)
@@ -125,15 +158,14 @@ def main():
             dataset_name = ma_d.group(1)
             split_data_protocol = SPLIT_DATA_PROTOCOL[ma_d.group(2)]
             arch = ma_d.group(3)
-
             lr = args.lr
-
             if arch == "conv3":
                 network = Conv3(IN_CHANNELS[dataset_name],IMAGE_SIZE[dataset_name], 2)
             model = network
             model = model.cuda()
             checkpoint = torch.load(model_path, map_location=lambda storage, location: storage)
             model.load_state_dict(checkpoint['state_dict'])
+
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(model_path, checkpoint['epoch']))
             extract_pkl_ma = extract_pkl.match(args.test_pkl_path)
@@ -141,31 +173,69 @@ def main():
             num_classes = int(extract_pkl_ma.group(2))
             num_support = int(extract_pkl_ma.group(3))
             num_query = int(extract_pkl_ma.group(4))
-            meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
-                                                dataset_name, is_train=False, pkl_task_dump_path=args.test_pkl_path,
-                                                load_mode=LOAD_TASK_MODE.LOAD,
-                                                split_data_protocol=split_data_protocol, no_random_way=True)
-            data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
-            evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, args.num_updates)
-            key = (ma.group(1), ma.group(2))
-            result[dataset_name][model_path] = evaluate_result
-            with open(os.path.dirname(args.test_pkl_path) + '/DL_DET_shot_{}_test_update_{}.json'.format(num_support, args.num_updates), "w") as file_obj:
-                file_obj.write(json.dumps(result))
-                file_obj.flush()
+            test_pkl_path = args.test_pkl_path
+            shots = [num_support]
+            if num_support == -1 and args.num_updates > 0:
+                shots = list(range(1,16))
+            elif args.num_updates == 0:
+                shots = [1]
+            if args.num_updates >= 0:  # 做多shots实验
+                for shot in shots:
+                    test_pkl_path = re.sub("shot_(.*?)_", "shot_{}_".format(shot), test_pkl_path)  # 替换shot和dataset
+                    test_pkl_path = re.sub("CIFAR-10", dataset_name, test_pkl_path)
+                    test_pkl_path = re.sub("TRAIN_I_TEST_II", str(split_data_protocol), test_pkl_path)
+                    meta_task_dataset = TaskDatasetForFinetune(tot_num_tasks, num_classes, shot, num_query,
+                                                        dataset_name, is_train=False, pkl_task_dump_path=test_pkl_path,
+                                                        load_mode=LOAD_TASK_MODE.LOAD,
+                                                        protocol=split_data_protocol, no_random_way=False)
+                    data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
+                    evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, args.num_updates)
+                    result[dataset_name][shot] = evaluate_result
+                    with open(os.path.dirname(model_path) + '/result@{}_{}@test_update_{}@lr_{}.json'.format(dataset_name,
+                                                       split_data_protocol, args.num_updates, args.lr), "w") as file_obj:
+                        file_obj.write(json.dumps(result))
+                        file_obj.flush()
+            elif args.num_updates == -1:
+                for num_update in range(0, 51):
+                    shot = 1
+                    test_pkl_path = re.sub("shot_(.*?)_", "shot_{}_".format(shot), test_pkl_path)  # 替换shot和dataset
+                    test_pkl_path = re.sub("CIFAR-10", dataset_name, test_pkl_path)
+                    test_pkl_path = re.sub("TRAIN_I_TEST_II", str(split_data_protocol), test_pkl_path)
+                    meta_task_dataset = TaskDatasetForFinetune(tot_num_tasks, num_classes, shot, num_query,
+                                                               dataset_name, is_train=False,
+                                                               pkl_task_dump_path=test_pkl_path,
+                                                               load_mode=LOAD_TASK_MODE.LOAD,
+                                                               protocol=split_data_protocol, no_random_way=False)
+                    data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
+                    evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, num_update)
+                    result[dataset_name][num_update] = evaluate_result
+                    with open(os.path.dirname(model_path) + '/result@{}_{}@updates_1_50@shot_{}.json'.format(dataset_name,
+                                                                                                       split_data_protocol,
+                                                                                                       1), "w") as file_obj:
+                        file_obj.write(json.dumps(result))
+                        file_obj.flush()
 
-def main_train_worker(args, model_path):
+def main_train_worker(args, model_path, META_ATTACKER_PART_I=None,META_ATTACKER_PART_II=None,gpu="0"):
+    if META_ATTACKER_PART_I  is None:
+        META_ATTACKER_PART_I = config.META_ATTACKER_PART_I
+    if META_ATTACKER_PART_II is None:
+        META_ATTACKER_PART_II = config.META_ATTACKER_PART_II
+    if gpu is not None:
+        print("Use GPU: {} for training".format(gpu))
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        os.environ['CUDA_VISIBLE_DEVICES'] = gpu
+    print("save to {}".format(model_path))
     global best_acc1
     if args.arch == "conv3":
         network = Conv3(IN_CHANNELS[args.dataset],IMAGE_SIZE[args.dataset], 2)
     model = network
-
     # elif args.arch == "resnet10":
     #     network = resnet10(num_classes=2)
     # elif args.arch == "resnet18":
     #     network = resnet18(num_classes=2)
 
     model = model.cuda()
-    train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.arch), True, args.split_protocol)
+    train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.arch), True, args.split_protocol,META_ATTACKER_PART_I,META_ATTACKER_PART_II)
     # val_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.arch), False,
     #                                  args.split_protocol)
 
