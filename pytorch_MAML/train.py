@@ -3,18 +3,16 @@ import sys
 
 
 sys.path.append("/home1/machen/adv_detection_meta_learning")
-from pytorch_MAML.evaluate import ablation_study_evaluate, leave_one_out_evaluate
+from evaluate.evaluate import ablation_study_evaluate, leave_one_out_evaluate, cross_domain_evaluate
 
 from pytorch_MAML.meta_dataset import SPLIT_DATA_PROTOCOL, LOAD_TASK_MODE
 import argparse
-from config import PY_ROOT, META_ATTACKER_PART_II, META_ATTACKER_PART_I, LEAVE_ONE_OUT_DATA_ROOT
+from config import PY_ROOT, LEAVE_ONE_OUT_DATA_ROOT
 import random
 import numpy as np
 from pytorch_MAML.maml import MetaLearner
 import torch
-import glob
-import re
-import json
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch Meta_SGD Training')
@@ -41,6 +39,8 @@ def parse_args():
     parser.add_argument("--no_random_way", action="store_true", help="whether to randomize the way")
     parser.add_argument("--evaluate", action="store_true", help="to evaluate the pretrained model")
     parser.add_argument("--study_subject", type=str, required=True)
+    parser.add_argument("--cross_domain_target", type=str, help="the target domain to evaluate")
+    parser.add_argument("--cross_domain_source", type=str, help="the target domain to evaluate")
 
     ## Logging, saving, and testing options
     args = parser.parse_args()
@@ -112,9 +112,13 @@ def main():
             learner.train(model_path, resume_epoch)
     else: # 测试模式
         # MAML@CIFAR-10_TRAIN_I_TEST_II@conv4@epoch_40@meta_batch_size_10@way_2@shot_1@num_query_15@num_updates_2@lr_0.001@inner_lr_0.01.pth.tar
-        if args.study_subject != "leave_one_out_study":
+
+        if args.study_subject == "cross_domain":
+            cross_domain_evaluate(args)
+        elif args.study_subject != "leave_one_out_study":
             ablation_study_evaluate(args)
         else:
             leave_one_out_evaluate(args)
+
 if __name__ == '__main__':
     main()

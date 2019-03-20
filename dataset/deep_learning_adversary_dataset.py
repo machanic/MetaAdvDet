@@ -1,3 +1,6 @@
+import random
+from collections import defaultdict
+
 import scipy.io
 from torch.utils import data
 from PIL import Image
@@ -10,7 +13,7 @@ import os
 from pytorch_MAML.meta_dataset import SPLIT_DATA_PROTOCOL
 
 class AdversaryDataset(data.Dataset):
-    def __init__(self, root_path, train, protocol, META_ATTACKER_PART_I, META_ATTACKER_PART_II):
+    def __init__(self, root_path, train, protocol, META_ATTACKER_PART_I, META_ATTACKER_PART_II, balance):
         self.root_path = root_path
         filter_str = "train"
         if not train:
@@ -18,6 +21,7 @@ class AdversaryDataset(data.Dataset):
         extract_pattern = re.compile("(.*?)_untargeted.*")
         self.cache = {}
         self.img_label_list = []
+        self.img_label_dict = defaultdict(list)
         for npz_path in glob.glob(root_path + "/*{}.npz".format(filter_str)):
 
             ma = extract_pattern.match(os.path.basename(npz_path))
@@ -48,9 +52,13 @@ class AdversaryDataset(data.Dataset):
                 label = 0
                 indexes = np.where(adv_pred != gt_label)[0]
             for index in indexes:
-                self.img_label_list.append((npz_path, index, label))
+                self.img_label_dict[label].append((npz_path, index, label))
             print("{} done".format(npz_path))
-
+        self.img_label_list.extend(self.img_label_dict[1])
+        if balance:
+            self.img_label_list.extend(random.sample(self.img_label_dict[0], len(self.img_label_dict[1])))
+        else:
+            self.img_label_list.extend(self.img_label_dict[0])
 
     def __len__(self):
         return len(self.img_label_list)

@@ -100,7 +100,7 @@ class TaskDatasetForFinetune(data.Dataset):
             folder_p = self.metatrain_folders_p
             folder_n = self.metatrain_folders_n
             num_total_batches = self.num_total_train_batches
-            if load_mode == LOAD_TASK_MODE.LOAD and os.path.exists(pkl_task_dump_path):  # 只要存在都不重新生成
+            if os.path.exists(pkl_task_dump_path):  # 只要存在都不重新生成
                 with open(pkl_task_dump_path, "rb") as file_obj:
                     self.train_tasks_data_classes = pickle.load(file_obj)
                 return
@@ -110,7 +110,7 @@ class TaskDatasetForFinetune(data.Dataset):
             folder_p = self.metaval_folders_p
             folder_n = self.metaval_folders_n
             num_total_batches = self.num_total_val_batches
-            if load_mode == LOAD_TASK_MODE.LOAD and os.path.exists(pkl_task_dump_path): # 只要存在都不重新生成
+            if os.path.exists(pkl_task_dump_path): # 只要存在都不重新生成
                 with open(pkl_task_dump_path, "rb") as file_obj:
                     self.val_tasks_data_classes = pickle.load(file_obj)
                 return

@@ -4,14 +4,13 @@ from networks.conv3 import Conv3
 from torch.utils.data import DataLoader
 
 from dataset.deep_learning_adversary_dataset import AdversaryDataset
-from pytorch_MAML.evaluate import finetune_eval_task_accuracy
+from evaluate.evaluate import finetune_eval_task_accuracy
 import argparse
 import os
 import random
 import time
 import warnings
 from networks.resnet import resnet10, resnet18
-from networks.shallow_convs import FourConvs
 import torch
 import torch.nn as nn
 import torch.nn.parallel
@@ -20,8 +19,6 @@ import torch.optim
 import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.models as models
-import copy
-from torch.optim import SGD
 from config import IMAGE_SIZE, IMAGE_DATA_ROOT
 from pytorch_MAML.score import forward_pass
 import json

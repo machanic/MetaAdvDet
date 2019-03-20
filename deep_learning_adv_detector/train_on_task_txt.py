@@ -18,12 +18,12 @@ from torch.utils.data import DataLoader
 import torch.utils.data.distributed
 import torchvision.models as models
 from dataset.presampled_task_dataset import TaskDatasetForDetector
-from config import IMAGE_SIZE, DATA_ROOT
+from config import IMAGE_SIZE
 import json
 from config import IN_CHANNELS, PY_ROOT
 from pytorch_MAML.meta_dataset import LOAD_TASK_MODE, SPLIT_DATA_PROTOCOL, MetaTaskDataset
 import re
-from pytorch_MAML.evaluate import finetune_eval_task_accuracy
+from evaluate.evaluate import finetune_eval_task_accuracy
 import glob
 
 

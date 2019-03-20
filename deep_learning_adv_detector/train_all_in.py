@@ -20,7 +20,7 @@ import torch.utils.data
 from torch.utils.data import DataLoader
 import torch.utils.data.distributed
 import torchvision.models as models
-from config import IMAGE_SIZE, IMAGE_DATA_ROOT, LEAVE_ONE_OUT_DATA_ROOT
+from config import IMAGE_SIZE, IMAGE_DATA_ROOT
 import config
 
 import json
@@ -29,7 +29,7 @@ from pytorch_MAML.meta_dataset import LOAD_TASK_MODE, SPLIT_DATA_PROTOCOL, MetaT
 from dataset.task_dataset_for_finetune import TaskDatasetForFinetune
 
 import re
-from pytorch_MAML.evaluate import finetune_eval_task_accuracy
+from evaluate.evaluate import finetune_eval_task_accuracy
 import glob
 import multiprocessing as mp
 
@@ -61,7 +61,7 @@ parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)',
                     dest='weight_decay')
 parser.add_argument("--dataset", type=str, default="CIFAR-10")
-parser.add_argument('-p', '--print-freq', default=10, type=int,
+parser.add_argument('-p', '--print-freq', default=100, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
@@ -74,9 +74,12 @@ parser.add_argument('--seed', default=None, type=int,
 parser.add_argument('--gpu', default=0, type=int,
                     help='GPU id to use.')
 parser.add_argument("--split_protocol", type=SPLIT_DATA_PROTOCOL,choices=list(SPLIT_DATA_PROTOCOL), help="split protocol of data")
+parser.add_argument("--cross_domain_target",type=str,help="the target domain to evaluate")
+parser.add_argument("--cross_domain_source",type=str,help="the target domain to evaluate")
 parser.add_argument("--num_updates", type=int, default=1, help="the number of inner updates")
 parser.add_argument("--test_pkl_path", type=str, default="",help="the train task txt file")
 parser.add_argument("--ablation_study_shot", action="store_true")
+parser.add_argument("--balance",action="store_true")
 best_acc1 = 0
 
 class Identity(nn.Module):
@@ -118,32 +121,39 @@ def main():
                 config.META_ATTACKER_PART_II.append("clean")
                 attack_name = leave_adversary
 
-                param_prefix = "{}@leave_{}@{}@epoch_{}@batch_size_{}@lr_{}".format(
+                param_prefix = "{}@leave_{}@{}@epoch_{}@batch_size_{}@lr_{}@balance_{}".format(
                     args.dataset,
-                    attack_name, args.arch, args.epochs, args.batch_size, args.lr)
+                    attack_name, args.arch, args.epochs, args.batch_size, args.lr,args.balance)
                 model_path = '{}/train_pytorch_model/DL_DET/LeaveOneOut/DL_DET@{}.pth.tar'.format(
                     PY_ROOT,
                     param_prefix)
                 os.makedirs(os.path.dirname(model_path), exist_ok=True)
-                gpus = ["0", "2","5","6","8"]
+                gpus = ["7", "8", "9"]
                 args.gpu = gpus[idx%len(gpus)]
                 print("using GPU:{}".format(args.gpu))
                 print("Test adv: {}".format(leave_adversary))
                 # main_train_worker(args, model_path, config)
+                if os.path.exists(model_path):
+                    continue
                 pool.apply_async(main_train_worker, args=(args, model_path, config.META_ATTACKER_PART_I, config.META_ATTACKER_PART_II,args.gpu))
             pool.close()
             pool.join()
         else:
-            model_path = '{}/train_pytorch_model/DL_DET/DL_DET@{}_{}@{}@epoch_{}@class_{}@lr_{}.pth.tar'.format(
+            model_path = '{}/train_pytorch_model/DL_DET/DL_DET@{}_{}@{}@epoch_{}@class_{}@lr_{}@balance_{}.pth.tar'.format(
                 PY_ROOT, args.dataset, args.split_protocol, args.arch,
                 args.epochs,
-                2, args.lr)
+                2, args.lr, args.balance)
             os.makedirs(os.path.dirname(model_path), exist_ok=True)
-            main_train_worker(args, model_path,gpu=args.gpu)
+            main_train_worker(args, model_path,gpu=str(args.gpu))
 
     else: # finetune evaluate
-        extract_pattern = re.compile(".*?.*?_(TRAIN_.*?_TEST_.*?)@(.*?)\.pth\.tar")
         # DL_DET@CIFAR-10_TRAIN_II_TEST_I@conv3@epoch_40@class_2@lr_0.0001.pth.tar
+        print("Use GPU: {} for training".format(args.gpu))
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
+        if args.split_protocol == SPLIT_DATA_PROTOCOL.LEAVE_ONE_FOR_TEST:
+            leave_out_evaluate(args)  # 测试leave one out
+            return
 
         extract_pattern_detail = re.compile(".*?DL_DET@(.*?)_(TRAIN_.*?)@(.*?)@epoch_(\d+)@class_(\d+)@lr_(.*?)\.pth\.tar")
         # /home1/machen/adv_detection_meta_learning/task/TRAIN_I_TEST_II/CIFAR-10/train_CIFAR-10_tot_num_tasks_20000_way_2_shot_1_query_15.pkl
@@ -152,10 +162,15 @@ def main():
         for model_path in glob.glob("{}/train_pytorch_model/DL_DET/DL_DET@*".format(PY_ROOT)):
             if str(args.split_protocol) not in model_path:
                 continue
+
             print("evaluate model :{}".format(os.path.basename(model_path)))
-            ma = extract_pattern.match(model_path)
             ma_d = extract_pattern_detail.match(model_path)
             dataset_name = ma_d.group(1)
+            if args.split_protocol == SPLIT_DATA_PROTOCOL.TRAIN_ALL_TEST_ALL:
+                if dataset_name != args.cross_domain_source:
+                    continue
+                dataset_name = args.cross_domain_target
+
             split_data_protocol = SPLIT_DATA_PROTOCOL[ma_d.group(2)]
             arch = ma_d.group(3)
             lr = args.lr
@@ -165,7 +180,6 @@ def main():
             model = model.cuda()
             checkpoint = torch.load(model_path, map_location=lambda storage, location: storage)
             model.load_state_dict(checkpoint['state_dict'])
-
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(model_path, checkpoint['epoch']))
             extract_pkl_ma = extract_pkl.match(args.test_pkl_path)
@@ -179,22 +193,26 @@ def main():
                 shots = list(range(1,16))
             elif args.num_updates == 0:
                 shots = [1]
+            if split_data_protocol == SPLIT_DATA_PROTOCOL.TRAIN_ALL_TEST_ALL:
+                shots = [1,5]  # cross domain用1,5 -shot
             if args.num_updates >= 0:  # 做多shots实验
                 for shot in shots:
-                    test_pkl_path = re.sub("shot_(.*?)_", "shot_{}_".format(shot), test_pkl_path)  # 替换shot和dataset
-                    test_pkl_path = re.sub("CIFAR-10", dataset_name, test_pkl_path)
-                    test_pkl_path = re.sub("TRAIN_I_TEST_II", str(split_data_protocol), test_pkl_path)
+                    if args.split_protocol == SPLIT_DATA_PROTOCOL.TRAIN_ALL_TEST_ALL:
+                        test_pkl_path = re.sub("shot_(.*?)_", "shot_{}_".format(shot), test_pkl_path)  # 替换shot和dataset
+                        test_pkl_path = re.sub("CIFAR-10", dataset_name, test_pkl_path)
+                        test_pkl_path = re.sub("TRAIN_I_TEST_II", str(split_data_protocol), test_pkl_path)
                     meta_task_dataset = TaskDatasetForFinetune(tot_num_tasks, num_classes, shot, num_query,
                                                         dataset_name, is_train=False, pkl_task_dump_path=test_pkl_path,
-                                                        load_mode=LOAD_TASK_MODE.LOAD,
-                                                        protocol=split_data_protocol, no_random_way=False)
+                                                        load_mode=LOAD_TASK_MODE.NO_LOAD,
+                                                        protocol=split_data_protocol, no_random_way=False)  # FIXME
                     data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
                     evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, args.num_updates)
                     result[dataset_name][shot] = evaluate_result
-                    with open(os.path.dirname(model_path) + '/result@{}_{}@test_update_{}@lr_{}.json'.format(dataset_name,
-                                                       split_data_protocol, args.num_updates, args.lr), "w") as file_obj:
-                        file_obj.write(json.dumps(result))
-                        file_obj.flush()
+                dataset_name = args.cross_domain_source + "--" + args.cross_domain_target
+                with open(os.path.dirname(model_path) + '/result@{}_{}@test_update_{}@lr_{}.json'.format(dataset_name,
+                                                   split_data_protocol, args.num_updates, args.lr), "w") as file_obj:
+                    file_obj.write(json.dumps(result))
+                    file_obj.flush()
             elif args.num_updates == -1:
                 for num_update in range(0, 51):
                     shot = 1
@@ -204,7 +222,7 @@ def main():
                     meta_task_dataset = TaskDatasetForFinetune(tot_num_tasks, num_classes, shot, num_query,
                                                                dataset_name, is_train=False,
                                                                pkl_task_dump_path=test_pkl_path,
-                                                               load_mode=LOAD_TASK_MODE.LOAD,
+                                                               load_mode=LOAD_TASK_MODE.NO_LOAD,
                                                                protocol=split_data_protocol, no_random_way=False)
                     data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
                     evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, num_update)
@@ -214,6 +232,57 @@ def main():
                                                                                                        1), "w") as file_obj:
                         file_obj.write(json.dumps(result))
                         file_obj.flush()
+def leave_out_evaluate(args):
+    print("Use GPU: {} for training".format(args.gpu))
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
+    extract_pattern_detail = re.compile(".*?DL_DET@(.*?)@leave_(.*?)@.*?@epoch_(\d+).*")
+    # /home1/machen/adv_detection_meta_learning/task/TRAIN_I_TEST_II/CIFAR-10/train_CIFAR-10_tot_num_tasks_20000_way_2_shot_1_query_15.pkl
+    extract_pkl = re.compile(".*?tot_num_tasks_(\d+)_way_(\d+)_shot_(.*?)_query_(\d+).*")
+    result = defaultdict(dict)
+
+    for model_path in glob.glob("{}/train_pytorch_model/DL_DET/LeaveOneOut/DL_DET@*".format(PY_ROOT)):
+        print("evaluate model :{}".format(os.path.basename(model_path)))
+        ma = extract_pattern_detail.match(model_path)
+        leave_adversary = ma.group(2)
+        dataset_name = ma.group(1)
+        leave_dir_path = config.LEAVE_ONE_OUT_DATA_ROOT[dataset_name] + "/{}".format(leave_adversary)
+        lr = args.lr
+        network = Conv3(IN_CHANNELS[dataset_name], IMAGE_SIZE[dataset_name], 2)
+        model = network
+        model = model.cuda()
+        checkpoint = torch.load(model_path, map_location=lambda storage, location: storage)
+        model.load_state_dict(checkpoint['state_dict'])
+        print("=> loaded checkpoint '{}' (epoch {})"
+              .format(model_path, checkpoint['epoch']))
+        extract_pkl_ma = extract_pkl.match(args.test_pkl_path)
+        tot_num_tasks = int(extract_pkl_ma.group(1))
+        num_classes = int(extract_pkl_ma.group(2))
+        num_support = int(extract_pkl_ma.group(3))
+        num_query = int(extract_pkl_ma.group(4))
+
+        shots = [1, 5]  # cross domain用1,5 -shot
+        if args.num_updates >= 0:  # 做多shots实验
+            for shot in shots:
+                test_pkl_path = "{}/task/LEAVE_ONE_FOR_TEST/{}/test_{}_adv_{}_tot_num_tasks_20000_way_2_shot_{}_query_15.pkl".format(PY_ROOT,
+                                                dataset_name,dataset_name,leave_adversary, shot)
+                meta_task_dataset = TaskDatasetForFinetune(tot_num_tasks, num_classes, shot, num_query,
+                                                           dataset_name, is_train=False,
+                                                           pkl_task_dump_path=test_pkl_path,
+                                                           load_mode=LOAD_TASK_MODE.NO_LOAD,
+                                                           protocol=SPLIT_DATA_PROTOCOL.LEAVE_ONE_FOR_TEST,
+                                                            no_random_way=False,leave_out_attack_dir=leave_dir_path)  # FIXME
+                data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
+                evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, args.num_updates)
+                result[dataset_name][shot] = evaluate_result
+            dataset_name = args.cross_domain_source + "--" + args.cross_domain_target
+            with open(os.path.dirname(model_path) + '/result@{}@leave_{}@test_update_{}@lr_{}.json'.format(dataset_name,
+                                                                                                     leave_adversary,
+                                                                                                     args.num_updates,
+                                                                                                     args.lr),
+                      "w") as file_obj:
+                file_obj.write(json.dumps(result))
+                file_obj.flush()
 
 def main_train_worker(args, model_path, META_ATTACKER_PART_I=None,META_ATTACKER_PART_II=None,gpu="0"):
     if META_ATTACKER_PART_I  is None:
@@ -224,7 +293,7 @@ def main_train_worker(args, model_path, META_ATTACKER_PART_I=None,META_ATTACKER_
         print("Use GPU: {} for training".format(gpu))
         os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
         os.environ['CUDA_VISIBLE_DEVICES'] = gpu
-    print("save to {}".format(model_path))
+    print("will save to {}".format(model_path))
     global best_acc1
     if args.arch == "conv3":
         network = Conv3(IN_CHANNELS[args.dataset],IMAGE_SIZE[args.dataset], 2)
@@ -235,14 +304,15 @@ def main_train_worker(args, model_path, META_ATTACKER_PART_I=None,META_ATTACKER_
     #     network = resnet18(num_classes=2)
 
     model = model.cuda()
-    train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.arch), True, args.split_protocol,META_ATTACKER_PART_I,META_ATTACKER_PART_II)
+    train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.arch),
+                                     True, args.split_protocol,META_ATTACKER_PART_I,META_ATTACKER_PART_II, args.balance)
     # val_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.arch), False,
     #                                  args.split_protocol)
 
-    # val_dataset = MetaTaskDataset(20000, 2, 1, 15,
-    #                                     args.dataset, is_train=False, pkl_task_dump_path=args.test_pkl_path,
-    #                                     load_mode=LOAD_TASK_MODE.LOAD,
-    #                                     split_data_protocol=args.split_protocol, no_random_way=True)
+    val_dataset = TaskDatasetForFinetune(20000, 2, 1, 15,
+                                        args.dataset, is_train=False, pkl_task_dump_path=args.test_pkl_path,
+                                        load_mode=LOAD_TASK_MODE.LOAD,
+                                        protocol=args.split_protocol, no_random_way=True)
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
@@ -269,14 +339,19 @@ def main_train_worker(args, model_path, META_ATTACKER_PART_I=None,META_ATTACKER_
         train_dataset, batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers, pin_memory=True)
 
-    # val_loader = torch.utils.data.DataLoader(
-    #     val_dataset,
-    #     batch_size=100, shuffle=False,
-    #     num_workers=0, pin_memory=True)
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_size=100, shuffle=False,
+        num_workers=0, pin_memory=True)
+    tensorboard = TensorBoardWriter("{0}/pytorch_DeepLearning_tensorboard".format(PY_ROOT), "DeepLearning")
     for epoch in range(args.start_epoch, args.epochs):
         adjust_learning_rate(optimizer, epoch, args)
         # train for one epoch
-        train(train_loader, None, model, criterion, optimizer, epoch, args)
+        train(train_loader, val_loader, model, criterion, optimizer, epoch,tensorboard, args)
+        if args.balance:
+            train_dataset.img_label_list.clear()
+            train_dataset.img_label_list.extend(train_dataset.img_label_dict[1])
+            train_dataset.img_label_list.extend(random.sample(train_dataset.img_label_dict[0], len(train_dataset.img_label_dict[1])))
         # evaluate on validation set
 
         # acc1 = validate(val_loader, model, criterion, args)
@@ -290,7 +365,7 @@ def main_train_worker(args, model_path, META_ATTACKER_PART_I=None,META_ATTACKER_
 
 
 
-def train(train_loader,val_loader, model, criterion, optimizer, epoch, args):
+def train(train_loader,val_loader, model, criterion, optimizer, epoch, tensorboard, args):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -299,7 +374,7 @@ def train(train_loader,val_loader, model, criterion, optimizer, epoch, args):
 
     # switch to train mode
     model.train()
-    tensorboard = TensorBoardWriter("{0}/pytorch_DeepLearning_tensorboard".format(PY_ROOT), "DeepLearning")
+
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
         # measure data loading time
@@ -333,17 +408,17 @@ def train(train_loader,val_loader, model, criterion, optimizer, epoch, args):
                 epoch, i, len(train_loader), batch_time=batch_time,
                 loss=losses, top1=top1, ))
 
-            # iter = epoch * len(train_loader) + i
-            # evaluate_result = finetune_eval_task_accuracy(model, val_loader, 0, 0, 1000)
-            # query_F1_tensor = torch.Tensor(1)
-            # query_F1_tensor.fill_(evaluate_result["query_F1"])
-            # tensorboard.record_val_query_F1(query_F1_tensor, iter)
-            # print('Epoch: [{0}][{1}/{2}]\t'
-            #       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-            #       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-            #       'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\tValQueryF1 {query_F1:.3f}'.format(
-            #     epoch, i, len(train_loader), batch_time=batch_time,
-            #     loss=losses, top1=top1, query_F1=evaluate_result["query_F1"]))
+            iter = epoch * len(train_loader) + i
+            evaluate_result = finetune_eval_task_accuracy(model, val_loader, 0, 0, 1000)
+            query_F1_tensor = torch.Tensor(1)
+            query_F1_tensor.fill_(evaluate_result["query_F1"])
+            tensorboard.record_val_query_F1(query_F1_tensor, iter)
+            print('Epoch: [{0}][{1}/{2}]\t'
+                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                  'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\tValQueryF1 {query_F1:.3f}'.format(
+                epoch, i, len(train_loader), batch_time=batch_time,
+                loss=losses, top1=top1, query_F1=evaluate_result["query_F1"]))
 
 
 def validate(val_loader, model, criterion, args):

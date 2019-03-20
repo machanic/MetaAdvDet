@@ -148,7 +148,7 @@ def finetune_with_two_stage_method(network_feature, network_classifier, val_load
     return result_json
 
 def leave_one_out_evaluate(args):
-    extract_pattern = re.compile(".*/MAML@(.*?)@leave_(.*?)@.*?@meta_batch_size_(\d+).*?@way_(\d+).*?@lr_(.*?)@inner_lr_(.*?)@.*")
+    extract_pattern = re.compile(".*/MAML@(.*?)@leave_(.*?)@.*?@meta_batch_size_(\d+).*?@way_(\d+)@shot_(\d+)@.*?@lr_(.*?)@inner_lr_(.*?)@.*")
     report_result = defaultdict(dict)
     get_test_folder = lambda dataset, adversary: LEAVE_ONE_OUT_DATA_ROOT[dataset] + "/" + adversary
     for model_path in glob.glob("{}/train_pytorch_model/{}/MAML@*".format(PY_ROOT, args.study_subject)):
@@ -158,27 +158,71 @@ def leave_one_out_evaluate(args):
         adversary = ma.group(2)
         meta_batch_size = int(ma.group(3))
         way = int(ma.group(4))
-        meta_lr = float(ma.group(5))
-        inner_lr = float(ma.group(6))
+        shot = int(ma.group(5))
+        meta_lr = float(ma.group(6))
+        inner_lr = float(ma.group(7))
         task_dump_path = args.task_dump_path + "/LEAVE_ONE_FOR_TEST/" + dataset
         print("check {}, {}".format(adversary, dataset))
         leave_out_folder = get_test_folder(dataset, adversary)
         learner = MetaLearner(dataset, way, meta_batch_size, meta_lr, inner_lr,
                               args.lr_decay_itr,
                               args.epoch, args.test_num_updates, args.load_task_mode, task_dump_path,
-                              args.split_protocol, args.arch, args.tot_num_tasks, args.num_support, args.num_query,
+                              args.split_protocol, args.arch, args.tot_num_tasks, shot, args.num_query,
                               args.no_random_way,
                               "", train=False, leave_out_attack_dir=leave_out_folder)
         learner.network.load_state_dict(checkpoint['state_dict'], strict=True)
         result_json  = learner.test_task_accuracy(-1, use_positive_position=True)
-        report_result[dataset][adversary] = result_json["query_F1"]
-    with open("{}/train_pytorch_model/{}/{}_result.json".format(PY_ROOT, args.study_subject, args.study_subject),
+        report_result[dataset + "@" + adversary][shot] = result_json["query_F1"]
+    with open("{}/train_pytorch_model/{}/{}_result.json".format(PY_ROOT, args.study_subject, dataset),
               "w") as file_obj:
         file_obj.write(json.dumps(report_result))
         file_obj.flush()
 
     return report_result
 
+
+def cross_domain_evaluate(args):
+    extract_pattern = re.compile(
+        ".*/MAML@(.*?)_(.*?)@(.*?)@epoch_(\d+)@meta_batch_size_(\d+)@way_(\d+)@shot_(\d+)@num_query_(\d+)@num_updates_(\d+)@lr_(.*?)@inner_lr_(.*?)@fixed_way_(.*?)\.pth.tar")
+    extract_param_prefix = re.compile(".*/MAML@(.*?)\.pth.tar")
+    report_result = defaultdict(dict)
+    str2bool = lambda v: v.lower() in ("yes", "true", "t", "1")
+    for model_path in glob.glob("{}/train_pytorch_model/{}/MAML@*".format(PY_ROOT, args.study_subject)):
+        ma_prefix = extract_param_prefix.match(model_path)
+        param_prefix = ma_prefix.group(1)
+        ma = extract_pattern.match(model_path)
+        dataset = ma.group(1)
+        split_protocol = SPLIT_DATA_PROTOCOL[ma.group(2)]
+        if split_protocol != SPLIT_DATA_PROTOCOL.TRAIN_ALL_TEST_ALL:
+            continue
+        if split_protocol == SPLIT_DATA_PROTOCOL.TRAIN_ALL_TEST_ALL:
+            if dataset != args.cross_domain_source:
+                continue
+        task_dump_path = "{}/{}/{}".format(args.task_dump_path, split_protocol, args.cross_domain_target)
+        arch = ma.group(3)
+        epoch = int(ma.group(4))
+        meta_batch_size = int(ma.group(5))
+        num_classes = int(ma.group(6))
+        meta_lr = float(ma.group(10))
+        inner_lr = float(ma.group(11))
+        fixe_way = str2bool(ma.group(12))
+        print("=> loading checkpoint '{}'".format(model_path))
+        checkpoint = torch.load(model_path, map_location=lambda storage, location: storage)
+
+        for shot in [1,5]:
+            learner = MetaLearner(args.cross_domain_target, num_classes, meta_batch_size, meta_lr, inner_lr, args.lr_decay_itr,
+                                  epoch,
+                                  args.test_num_updates,
+                                  args.load_task_mode,
+                                  task_dump_path, split_protocol, arch, args.tot_num_tasks, shot, 15,
+                                  fixe_way, param_prefix, train=False, )
+            learner.network.load_state_dict(checkpoint['state_dict'], strict=True)
+            result_json = learner.test_task_accuracy(-1)
+            report_result[args.cross_domain_source+"--"+args.cross_domain_target][shot] = result_json
+    with open("{}/train_pytorch_model/{}/{}--{}@finetune_{}_result.json".format(PY_ROOT,args.study_subject,args.cross_domain_source,
+                                            args.cross_domain_target, args.test_num_updates), "w") as file_obj:
+        file_obj.write(json.dumps(report_result))
+        file_obj.flush()
 
 def ablation_study_evaluate(args):
     extract_pattern = re.compile(
