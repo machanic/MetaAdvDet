@@ -1,4 +1,5 @@
 import json
+import re
 
 from torch.utils import data
 from config import IMAGE_SIZE, DATA_ROOT, CLASS_NUM, LEAVE_ONE_OUT_DATA_ROOT, IN_CHANNELS
@@ -34,6 +35,7 @@ class TaskDatasetForFinetune(data.Dataset):
                     batch_size: size of meta batch size (e.g. number of functions)
                 """
         self.num_samples_per_class = num_support + num_query
+        self.pattern = re.compile(".*(\d+)_(\d+).*")
         self.num_classes = num_classes  # e.g. 5-way
         self.img_size = IMAGE_SIZE[dataset]
         self.dataset = dataset
@@ -100,7 +102,7 @@ class TaskDatasetForFinetune(data.Dataset):
             folder_p = self.metatrain_folders_p
             folder_n = self.metatrain_folders_n
             num_total_batches = self.num_total_train_batches
-            if os.path.exists(pkl_task_dump_path):  # 只要存在都不重新生成
+            if load_mode == LOAD_TASK_MODE.LOAD and os.path.exists(pkl_task_dump_path):  # 只要存在都不重新生成
                 with open(pkl_task_dump_path, "rb") as file_obj:
                     self.train_tasks_data_classes = pickle.load(file_obj)
                 return
@@ -110,7 +112,7 @@ class TaskDatasetForFinetune(data.Dataset):
             folder_p = self.metaval_folders_p
             folder_n = self.metaval_folders_n
             num_total_batches = self.num_total_val_batches
-            if os.path.exists(pkl_task_dump_path): # 只要存在都不重新生成
+            if load_mode == LOAD_TASK_MODE.LOAD and os.path.exists(pkl_task_dump_path): # 只要存在都不重新生成
                 with open(pkl_task_dump_path, "rb") as file_obj:
                     self.val_tasks_data_classes = pickle.load(file_obj)
                 return
@@ -127,11 +129,11 @@ class TaskDatasetForFinetune(data.Dataset):
             # 为每一类sample出self.num_samples_per_class个样本
              # 从这一句可以看出, 每个task为task_folders随机安排的class id毫无规律可言. 所以no_random_way也是作用在这里
             # nb_samples = self.num_samples_per_class = support num + query num
-            supp_lbs_and_img_paths, query_lbs_and_img_paths, pos_position = get_image_paths_with_gt(task_folders,
+            supp_lbs_and_img_paths, query_lbs_and_img_paths, pos_label = get_image_paths_with_gt(task_folders,
                                                         self.num_support, self.num_query, is_test=not train) # task_folders包含正负样本的分布，但是具体support取几个，query取几个
             if len(supp_lbs_and_img_paths) == 0:
                 continue
-            data_class_task = FilesPerTask(supp_lbs_and_img_paths, query_lbs_and_img_paths, i, pos_position)  # 第i个task的5-way的所有数据
+            data_class_task = FilesPerTask(supp_lbs_and_img_paths, query_lbs_and_img_paths, i, pos_label)  # 第i个task的5-way的所有数据
             tasks_data_classes.append(data_class_task)
         self.dump_task(tasks_data_classes, pkl_task_dump_path)
 
@@ -165,7 +167,20 @@ class TaskDatasetForFinetune(data.Dataset):
         image_list = []
         adv_label_list = []
         img_gt_label_list = []
-        for adv_type_label, img_gt_label, image_path in train_files:  # adv_type_label, img_gt_label, whole_path
+        for data_tuple in train_files:  # adv_type_label, img_gt_label, whole_path
+            if len(data_tuple) == 3:
+                adv_type_label, img_gt_label, image_path = data_tuple
+                ma = self.pattern.match(image_path)
+                assert img_gt_label == int(ma.group(1))
+            else:
+                adv_type_label, image_path = data_tuple
+                ma = self.pattern.match(image_path)
+                img_gt_label = int(ma.group(1))
+            if self.no_random_way:
+                ma = self.pattern.match(image_path)
+                adv_type_label = int(ma.group(2))  # adv noise label
+                if adv_type_label != 1:
+                    adv_type_label = 0
             image_idx = int(image_path[image_path.rindex("#")+1:])
             image_path = image_path[:image_path.rindex("#")]
             fobj = open(image_path, "rb")
@@ -181,11 +196,25 @@ class TaskDatasetForFinetune(data.Dataset):
         task_train_ims = np.concatenate(image_list, axis=0)  # N, 3072
         train_adv_labels = np.array(adv_label_list)
         train_img_gt_labels = np.array(img_gt_label_list)
-
         image_list = []
         adv_label_list = []
         img_gt_label_list = []
-        for adv_type_label, img_gt_label, image_path in test_files:
+        for data_tuple in test_files:
+            if len(data_tuple) == 3:
+                adv_type_label, img_gt_label, image_path = data_tuple
+                ma = self.pattern.match(image_path)
+                assert img_gt_label == int(ma.group(1))
+            else:
+                adv_type_label, image_path = data_tuple
+                ma = self.pattern.match(image_path)
+                img_gt_label = int(ma.group(1))
+
+            if self.no_random_way:
+                ma = self.pattern.match(image_path)
+                adv_type_label = int(ma.group(2))  # adv noise label
+                if adv_type_label != 1:
+                    adv_type_label = 0
+
             image_idx = int(image_path[image_path.rindex("#") + 1:])
             image_path = image_path[:image_path.rindex("#")]
             fobj = open(image_path, "rb")

@@ -1,4 +1,5 @@
 import json
+import re
 
 from torch.utils import data
 from config import IMAGE_SIZE, DATA_ROOT, CLASS_NUM, LEAVE_ONE_OUT_DATA_ROOT, IN_CHANNELS
@@ -51,7 +52,7 @@ class MetaTaskDataset(data.Dataset):
         self.no_random_way =  no_random_way
         self.num_support = num_support
         self.num_query = num_query
-
+        self.pattern  = re.compile(".*?(\d+)_(\d+).*")
         if protocol == SPLIT_DATA_PROTOCOL.TRAIN_I_TEST_II:
             train_sub_folder = "I"
             test_sub_folder = "II"
@@ -121,6 +122,7 @@ class MetaTaskDataset(data.Dataset):
             folder_n = self.metaval_folders_n
             num_total_batches = self.num_total_val_batches
             if load_mode == LOAD_TASK_MODE.LOAD and os.path.exists(pkl_task_dump_path):
+                print("using {} to evaluate".format(pkl_task_dump_path))
                 with open(pkl_task_dump_path, "rb") as file_obj:
                     self.val_tasks_data_classes = pickle.load(file_obj)
                 return
@@ -133,18 +135,13 @@ class MetaTaskDataset(data.Dataset):
             task_folders = p_folder + n_folder  # 共5个文件夹表示5-way
 
             random.shuffle(task_folders)
-            positive_label = 0
-            for k in range(len(task_folders)):
-                if task_folders[k].endswith('_1'):
-                    positive_label = k
-                    break
 
             # 为每一类sample出self.num_samples_per_class个样本
              # 从这一句可以看出, 每个task为task_folders随机安排的class id毫无规律可言. 所以no_random_way也是作用在这里
             # nb_samples = self.num_samples_per_class = support num + query num
-            supp_lbs_and_img_paths, query_lbs_and_img_paths, positive_label = get_image_paths(task_folders, range(self.num_classes),
+            supp_lbs_and_img_paths, query_lbs_and_img_paths, positive_label = get_image_paths(task_folders,
                                                         self.num_support, self.num_query, is_test=not train,
-                                        no_random_way=self.no_random_way,positive_label=positive_label) # task_folders包含正负样本的分布，但是具体support取几个，query取几个
+                                        no_random_way=self.no_random_way) # task_folders包含正负样本的分布，但是具体support取几个，query取几个
 
             data_class_task = FilesPerTask(supp_lbs_and_img_paths, query_lbs_and_img_paths, i, positive_label)  # 第i个task的5-way的所有数据
             tasks_data_classes.append(data_class_task)
@@ -191,7 +188,13 @@ class MetaTaskDataset(data.Dataset):
             im = np.transpose(im, axes=(2,0,1))
             im2 = im.reshape(self.dim_input)
             image_list.append(im2[np.newaxis, :]) # 加一个新的维度
-            label = label_and_image_path[0]
+            if self.no_random_way:
+                ma = self.pattern.match(image_path)
+                label = int(ma.group(2))  # adv noise label
+                if label != 1:
+                    label = 0
+            else:
+                label = label_and_image_path[0]
             label_list.append(label)
 
         task_train_ims = np.concatenate(image_list, axis=0)  # N, 3072
@@ -213,7 +216,13 @@ class MetaTaskDataset(data.Dataset):
             im = np.transpose(im, axes=(2, 0, 1))
             im2 = im.reshape(self.dim_input)
             image_list.append(im2[np.newaxis, :])
-            label = label_and_image_path[0]
+            if self.no_random_way:
+                ma = self.pattern.match(image_path)
+                label = int(ma.group(2))  # adv noise label
+                if label != 1:
+                    label = 0
+            else:
+                label = label_and_image_path[0]
             label_list.append(label)
         task_test_ims = np.concatenate(image_list, axis=0)  # N C H W
         task_test_lbls = np.array(label_list)

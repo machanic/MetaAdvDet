@@ -219,7 +219,7 @@ class NeuralFingerprintDetector(object):
         ex.dxs = fixed_dxs
         ex.yhat_p = yhat_p
         ex.diff = diff
-        ex.diff_norm = diff_norm
+        ex.diff_norm = diff_norm.detach().cpu().numpy()
         ex.y_class_with_fp = y_class_with_fp
 
         return ex
@@ -233,7 +233,8 @@ class NeuralFingerprintDetector(object):
             stats.ids.add(ex.id)
             # Check legal: ? D({f(x+dx)}, {y^k}) < tau for all classes k.
             below_threshold = diff_norm < reject_threshold
-            below_threshold_t = below_threshold[y_class_with_fp].item()
+            below_threshold = below_threshold.astype(np.int32)
+            below_threshold_t = below_threshold[y_class_with_fp]
 
             is_legal = below_threshold_t > 0
             ex.is_legal = is_legal
@@ -321,22 +322,27 @@ class NeuralFingerprintDetector(object):
             support_images = support_images.cuda()
             query_images = query_images.cuda()
             for task_idx in range(support_images.size(0)):
+                print("evaluate task {}".format(task_idx))
                 clean_support_index = np.where(support_binary_labels[task_idx] == 1)[0]
                 clean_imgs = support_images[task_idx][clean_support_index]
                 clean_labels = support_gt_labels[task_idx][clean_support_index]  # support label 需要传入干净图 的真正label，而不是0/1
                 test_net.copy_weights(self.model)
-                for m in test_net.modules():
-                    if isinstance(m, torch.nn.BatchNorm2d):
-                        m.eval()  # BN层会出问题，不要训练
+
                 optimizer = optim.SGD(test_net.parameters(), lr=lr)
                 batch_size = clean_imgs.size(0)
                 clean_imgs = clean_imgs.view(batch_size, IN_CHANNELS[ds_name], IMAGE_SIZE[ds_name][0], IMAGE_SIZE[ds_name][1])
+                test_net.train()
+                for m in test_net.modules():
+                    if isinstance(m, torch.nn.BatchNorm2d):
+                        m.eval()  # BN层会出问题，不要训练
                 for _ in range(num_updates):  # 先fine_tune
                     self.train_one_image(test_net, clean_imgs, clean_labels, optimizer, 1)
 
                 test_net.eval()
                 x, y = query_images[task_idx], query_gt_labels[task_idx]  # 注意这个分类信息是img gt label
                 binary_y = query_binary_labels[task_idx]
+                y = y.detach().cpu().numpy()
+                binary_y = binary_y.detach().cpu().numpy()
                 batch_size = x.size(0)
                 x = x.view(batch_size, IN_CHANNELS[ds_name], IMAGE_SIZE[ds_name][0], IMAGE_SIZE[ds_name][1])
 
@@ -347,8 +353,8 @@ class NeuralFingerprintDetector(object):
                     ex = self.model_with_fingerprint(test_net, x[b:b + 1], self.fp)
                     # Careful! Needs Dataloader with shuffle=False
                     ex.id = i
-                    ex.y = y[b].item() # ground truth of real image : 1 , adversarial image 0
-                    ex.binary_y = binary_y[b].item()
+                    ex.y = y[b] # ground truth of real image : 1 , adversarial image 0
+                    ex.binary_y = binary_y[b]
                     ex, stats_per_tau = self.detect_with_fingerprints(ex, stats_per_tau)
                     i += 1
 
@@ -373,4 +379,4 @@ class NeuralFingerprintDetector(object):
         tau = np.mean(all_tau)
         del test_net
         print("final   F1: {}  tau:{}".format( F1, tau))
-        return F1
+        return F1, tau

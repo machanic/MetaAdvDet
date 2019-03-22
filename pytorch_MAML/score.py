@@ -50,7 +50,7 @@ def evaluate(net, in_, target_Nway, target_positive, weights=None, use_positive_
     predict = np.argmax(out.detach().cpu().numpy(), axis=1)
     Nway_labels = target_Nway.detach().cpu().numpy()
     if use_positive_position:
-        two_way_accuracy, F1 = Nway_2way(predict, Nway_labels, target_positive.detach().cpu().numpy())
+        two_way_accuracy, F1 = Nway_2way(predict, Nway_labels, target_positive.detach().cpu().numpy()[0])
     else:
         two_way_accuracy, F1 = accuracy_score(Nway_labels, predict), f1_score(Nway_labels, predict)
     return two_way_accuracy, F1

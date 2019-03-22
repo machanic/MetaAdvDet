@@ -1,9 +1,13 @@
 from __future__ import print_function
 import os.path
+import pstats
 import sys
+
+import numpy as np
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
 from collections import defaultdict
 
+import config
 from dataset.task_dataset_for_finetune import TaskDatasetForFinetune
 
 
@@ -26,7 +30,7 @@ import re
 from config import IMAGE_SIZE, IMAGE_DATA_ROOT, IN_CHANNELS, CLASS_NUM, PY_ROOT
 from neural_fingerprint.fingerprint_detector import NeuralFingerprintDetector
 import glob
-
+import cProfile
 def parse_args():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch train_fingerprint Example')
@@ -59,10 +63,13 @@ def parse_args():
     parser.add_argument("--num_support",type=int,default=5)
     parser.add_argument("--num_query", type=int, default=15)
     parser.add_argument("--log-dir")
+    parser.add_argument("--profile", action="store_true", help="use profile to stats evaluation speed")
     args = parser.parse_args()
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
     return args
+
+
 
 
 def main():
@@ -142,8 +149,10 @@ def main():
             results = defaultdict(dict)
             ma = extract_pattern.match(model_path)
             ds_name = ma.group(1)
-            if ds_name != args.ds_name:
+            if ds_name != "MNIST":
                 continue
+            # if ds_name != args.ds_name:
+            #     continue
             arch = ma.group(2)
             epoch = int(ma.group(3))
             num_dx = int(ma.group(6))
@@ -156,36 +165,90 @@ def main():
                 network = resnet18(in_channels=IN_CHANNELS[ds_name], num_classes=CLASS_NUM[ds_name])
             reject_thresholds = [0. + 0.001 * i for i in range(2000)]
             network.load_state_dict(torch.load(model_path, lambda storage, location: storage)["state_dict"])
-            network.cuda()
+
             print("load {} over".format(model_path))
             detector = NeuralFingerprintDetector(ds_name, network, num_dx, CLASS_NUM[ds_name], eps=eps,
                                                  out_fp_dxdy_dir=args.output_dx_dy_dir)
-            all_shots = [0, 1, 5, 10, 15]
+            all_shots = [0, 1, 5]
             if args.num_updates == 0:
                 all_shots = [1]
             query_count = 15
-            for shot in all_shots:
-                if shot == 0:
-                    shot = 1
-                    args.num_updates = 0
-                pkl_path = "{}/task/{}/{}/test_{}_tot_num_tasks_20000_way_2_shot_{}_query_{}.pkl".format(PY_ROOT,args.protocol,
-                                                                                                         ds_name,ds_name, shot, query_count)
-                ma = extract_pattern_for_pkl.match(pkl_path)
-                num_way = 2
-                num_query = int(ma.group(3))
-                adv_val_dataset = TaskDatasetForFinetune(20000, num_way, shot, num_query,
-                            ds_name, is_train=False, load_mode=LOAD_TASK_MODE.LOAD,
-                            pkl_task_dump_path=pkl_path, protocol=args.protocol, no_random_way=True)
-                print("using {} to evaluate".format(pkl_path))
-                adv_val_loader = torch.utils.data.DataLoader(adv_val_dataset, batch_size=100, shuffle=False, **kwargs)
-                F1 = detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name,
-                                                                        reject_thresholds, args.num_updates, args.lr)
-                results[ds_name][shot] = {"F1":F1, "eps":eps, "num_dx":num_dx, "num_updates":args.num_updates}
-            with open(PY_ROOT + "/train_pytorch_model/NF_Det/finger_eval@{}_{}@epoch_{}@lr_{}@num_updates_{}.json".format(ds_name, args.protocol,
-                                                                                                    epoch, args.lr, args.num_updates),"w") as file_obj:
-                file_obj.write(json.dumps(results))
-                file_obj.write("\n\n{}".format(pkl_path))
-                file_obj.flush()
+            old_updates = args.num_updates
+            if args.protocol == SPLIT_DATA_PROTOCOL.LEAVE_ONE_FOR_TEST:
+                all_leave_adversaries = set(config.META_ATTACKER_PART_I + config.META_ATTACKER_PART_II)
+                all_leave_adversaries.remove("clean")
+                if ds_name != 'CIFAR-10':
+                    continue
+                network.cuda()
+                for leave_adversary in all_leave_adversaries:
+                    leave_dir_path = config.LEAVE_ONE_OUT_DATA_ROOT[ds_name] + "/{}".format(leave_adversary)
+                    for shot in all_shots:
+                        report_shot = shot
+                        if shot == 0:
+                            shot = 1
+                            args.num_updates = 0
+                        else:
+                            args.num_updates = old_updates
+
+                        pkl_path = "{}/task/LEAVE_ONE_FOR_TEST/{}/test_{}_adv_{}_tot_num_tasks_20000_way_2_shot_{}_query_15.pkl".format(
+                            PY_ROOT,
+                            ds_name, ds_name, leave_adversary, shot)
+                        # pkl_path = "{}/task/TRAIN_I_TEST_II/{}/test_{}_tot_num_tasks_20000_way_2_shot_{}_query_{}.pkl".format(
+                        #     PY_ROOT,
+                        #     ds_name, ds_name, shot, query_count)
+
+                        ma = extract_pattern_for_pkl.match(pkl_path)
+                        num_way = 2
+                        num_query = int(ma.group(3))
+                        adv_val_dataset = TaskDatasetForFinetune(20000, num_way, shot, num_query,
+                                    ds_name, is_train=False, load_mode=LOAD_TASK_MODE.LOAD,
+                                    pkl_task_dump_path=pkl_path, protocol=args.protocol, no_random_way=True, leave_out_attack_dir=leave_dir_path)
+                        print("using {} to evaluate".format(pkl_path))
+                        adv_val_loader = torch.utils.data.DataLoader(adv_val_dataset, batch_size=100, shuffle=False, **kwargs)
+                        F1, tau = detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name,
+                                                                                reject_thresholds, args.num_updates, args.lr)
+                        results[leave_adversary][report_shot] = {"F1":F1,  "best_tau":tau, "eps":eps, "num_dx":num_dx, "num_updates":args.num_updates}
+                        print("shot {} done".format(shot))
+                with open(PY_ROOT + "/train_pytorch_model/NF_Det/eval@leave_out_test@{}_{}@epoch_{}@lr_{}@num_updates_{}.json".format(ds_name, args.protocol,
+                                                                                                        epoch, args.lr, args.num_updates),"w") as file_obj:
+                    file_obj.write(json.dumps(results))
+                    file_obj.write("\n\n{}".format(pkl_path))
+                    file_obj.flush()
+            else:  #不是LEAVE_ONE_OUT模式
+                network.cuda()
+                for shot in all_shots:
+                    report_shot = shot
+                    if shot == 0:
+                        shot = 1
+                        args.num_updates = 0
+                    else:
+                        args.num_updates = old_updates
+                    pkl_path = "{}/task/{}/{}/test_{}_tot_num_tasks_20000_way_2_shot_{}_query_{}.pkl".format(PY_ROOT,args.protocol,
+                                                                                                             ds_name,ds_name, shot, query_count)
+                    ma = extract_pattern_for_pkl.match(pkl_path)
+                    num_way = 2
+                    num_query = int(ma.group(3))
+                    adv_val_dataset = TaskDatasetForFinetune(20000, num_way, shot, num_query,
+                                ds_name, is_train=False, load_mode=LOAD_TASK_MODE.LOAD,
+                                pkl_task_dump_path=pkl_path, protocol=args.protocol, no_random_way=True)
+                    print("using {} to evaluate".format(pkl_path))
+                    adv_val_loader = torch.utils.data.DataLoader(adv_val_dataset, batch_size=100, shuffle=False, **kwargs)
+                    if args.profile:
+                        cProfile.runctx("detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name, reject_thresholds, args.num_updates, args.lr)", globals(), locals(), "Profile.prof")
+                        s = pstats.Stats("Profile.prof")
+                        s.strip_dirs().sort_stats("time").print_stats()
+                    else:
+                        F1, tau = detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name,
+                                                                                reject_thresholds, args.num_updates, args.lr)
+                        results[ds_name][report_shot] = {"F1":F1,  "best_tau":tau, "eps":eps, "num_dx":num_dx, "num_updates":args.num_updates}
+                        print("shot {} done".format(shot))
+                if not args.profile:
+                    with open(PY_ROOT + "/train_pytorch_model/NF_Det/finger_eval@{}_{}@epoch_{}@lr_{}@num_updates_{}.json".format(ds_name, args.protocol,
+                                                                                                            epoch, args.lr, args.num_updates),"w") as file_obj:
+                        file_obj.write(json.dumps(results))
+                        file_obj.write("\n\n{}".format(pkl_path))
+                        file_obj.flush()
+
 
 if __name__ == "__main__":
     main()

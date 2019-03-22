@@ -108,7 +108,7 @@ def main():
             all_adversaries = config.META_ATTACKER_PART_I + config.META_ATTACKER_PART_II
             all_adversaries = list(set(all_adversaries))
             all_adversaries.remove("clean")
-            args.split_protocol = SPLIT_DATA_PROTOCOL.TRAIN_I_TEST_II
+            args.split_protocol = SPLIT_DATA_PROTOCOL.TRAIN_I_TEST_II  # 这个trick很重要为了后面初始化
             pool = mp.Pool(processes=15)
             for idx, leave_adversary in enumerate(all_adversaries):
                 config.META_ATTACKER_PART_I.clear()
@@ -135,9 +135,10 @@ def main():
                 # main_train_worker(args, model_path, config)
                 if os.path.exists(model_path):
                     continue
-                pool.apply_async(main_train_worker, args=(args, model_path, config.META_ATTACKER_PART_I, config.META_ATTACKER_PART_II,args.gpu))
-            pool.close()
-            pool.join()
+                main_train_worker(args, model_path, config.META_ATTACKER_PART_I, config.META_ATTACKER_PART_II,args.gpu)
+            #     pool.apply_async(main_train_worker, args=(args, model_path, config.META_ATTACKER_PART_I, config.META_ATTACKER_PART_II,args.gpu))
+            # pool.close()
+            # pool.join()
         else:
             model_path = '{}/train_pytorch_model/DL_DET/DL_DET@{}_{}@{}@epoch_{}@class_{}@lr_{}@balance_{}.pth.tar'.format(
                 PY_ROOT, args.dataset, args.split_protocol, args.arch,
@@ -160,12 +161,17 @@ def main():
         extract_pkl = re.compile(".*?tot_num_tasks_(\d+)_way_(\d+)_shot_(.*?)_query_(\d+).*")
         result = defaultdict(dict)
         for model_path in glob.glob("{}/train_pytorch_model/DL_DET/DL_DET@*".format(PY_ROOT)):
-            if str(args.split_protocol) not in model_path:
-                continue
-
-            print("evaluate model :{}".format(os.path.basename(model_path)))
             ma_d = extract_pattern_detail.match(model_path)
             dataset_name = ma_d.group(1)
+            if dataset_name != "SVHN":
+                continue
+            if str(args.split_protocol) not in model_path:
+                continue
+            if "balance_True" in model_path:  # FIXME 如果deep平衡分类后超过meta
+                continue
+            print("evaluate model :{}".format(os.path.basename(model_path)))
+
+
             if args.split_protocol == SPLIT_DATA_PROTOCOL.TRAIN_ALL_TEST_ALL:
                 if dataset_name != args.cross_domain_source:
                     continue
@@ -189,7 +195,7 @@ def main():
             num_query = int(extract_pkl_ma.group(4))
             test_pkl_path = args.test_pkl_path
             shots = [num_support]
-            if num_support == -1 and args.num_updates > 0:
+            if args.num_updates > 0:
                 shots = list(range(1,16))
             elif args.num_updates == 0:
                 shots = [1]
@@ -198,40 +204,44 @@ def main():
             if args.num_updates >= 0:  # 做多shots实验
                 for shot in shots:
                     if args.split_protocol == SPLIT_DATA_PROTOCOL.TRAIN_ALL_TEST_ALL:
-                        test_pkl_path = re.sub("shot_(.*?)_", "shot_{}_".format(shot), test_pkl_path)  # 替换shot和dataset
+                          # 替换shot和dataset
                         test_pkl_path = re.sub("CIFAR-10", dataset_name, test_pkl_path)
                         test_pkl_path = re.sub("TRAIN_I_TEST_II", str(split_data_protocol), test_pkl_path)
-                    meta_task_dataset = TaskDatasetForFinetune(tot_num_tasks, num_classes, shot, num_query,
+                    test_pkl_path = re.sub("shot_(.*?)_", "shot_{}_".format(shot), test_pkl_path)
+                    meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, shot, num_query,
                                                         dataset_name, is_train=False, pkl_task_dump_path=test_pkl_path,
-                                                        load_mode=LOAD_TASK_MODE.NO_LOAD,
-                                                        protocol=split_data_protocol, no_random_way=False)  # FIXME
+                                                        load_mode=LOAD_TASK_MODE.LOAD,
+                                                        protocol=split_data_protocol, no_random_way=True)
                     data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
                     evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, args.num_updates)
                     result[dataset_name][shot] = evaluate_result
-                dataset_name = args.cross_domain_source + "--" + args.cross_domain_target
-                with open(os.path.dirname(model_path) + '/result@{}_{}@test_update_{}@lr_{}.json'.format(dataset_name,
+                if args.split_protocol == SPLIT_DATA_PROTOCOL.TRAIN_ALL_TEST_ALL:
+                    dataset_name = args.cross_domain_source + "--" + args.cross_domain_target
+                with open(os.path.dirname(model_path) + '/nobalanced_result@{}_{}@test_update_{}@lr_{}.json'.format(dataset_name, # FIXME
                                                    split_data_protocol, args.num_updates, args.lr), "w") as file_obj:
                     file_obj.write(json.dumps(result))
                     file_obj.flush()
+                    print("write to {} done".format(os.path.dirname(model_path) + '/nobalanced_result@{}_{}@test_update_{}@lr_{}.json'.format(dataset_name,  #FIXME
+                                                   split_data_protocol, args.num_updates, args.lr)))
             elif args.num_updates == -1:
                 for num_update in range(0, 51):
                     shot = 1
                     test_pkl_path = re.sub("shot_(.*?)_", "shot_{}_".format(shot), test_pkl_path)  # 替换shot和dataset
                     test_pkl_path = re.sub("CIFAR-10", dataset_name, test_pkl_path)
                     test_pkl_path = re.sub("TRAIN_I_TEST_II", str(split_data_protocol), test_pkl_path)
-                    meta_task_dataset = TaskDatasetForFinetune(tot_num_tasks, num_classes, shot, num_query,
+                    meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, shot, num_query,
                                                                dataset_name, is_train=False,
                                                                pkl_task_dump_path=test_pkl_path,
                                                                load_mode=LOAD_TASK_MODE.NO_LOAD,
-                                                               protocol=split_data_protocol, no_random_way=False)
+                                                               protocol=split_data_protocol, no_random_way=True)
                     data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
                     evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, num_update)
                     result[dataset_name][num_update] = evaluate_result
-                    with open(os.path.dirname(model_path) + '/result@{}_{}@updates_1_50@shot_{}.json'.format(dataset_name,
-                                                                                                       split_data_protocol,
-                                                                                                       1), "w") as file_obj:
-                        file_obj.write(json.dumps(result))
-                        file_obj.flush()
+                with open(os.path.dirname(model_path) + '/result@{}_{}@updates_1_50@shot_{}.json'.format(dataset_name,
+                                                                                                   split_data_protocol,
+                                                                                                   1), "w") as file_obj:
+                    file_obj.write(json.dumps(result))
+                    file_obj.flush()
 def leave_out_evaluate(args):
     print("Use GPU: {} for training".format(args.gpu))
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -240,7 +250,7 @@ def leave_out_evaluate(args):
     # /home1/machen/adv_detection_meta_learning/task/TRAIN_I_TEST_II/CIFAR-10/train_CIFAR-10_tot_num_tasks_20000_way_2_shot_1_query_15.pkl
     extract_pkl = re.compile(".*?tot_num_tasks_(\d+)_way_(\d+)_shot_(.*?)_query_(\d+).*")
     result = defaultdict(dict)
-
+    old_num_updates = args.num_updates
     for model_path in glob.glob("{}/train_pytorch_model/DL_DET/LeaveOneOut/DL_DET@*".format(PY_ROOT)):
         print("evaluate model :{}".format(os.path.basename(model_path)))
         ma = extract_pattern_detail.match(model_path)
@@ -261,28 +271,32 @@ def leave_out_evaluate(args):
         num_support = int(extract_pkl_ma.group(3))
         num_query = int(extract_pkl_ma.group(4))
 
-        shots = [1, 5]  # cross domain用1,5 -shot
+        shots = [0, 1, 5]  # cross domain用1,5 -shot
+
         if args.num_updates >= 0:  # 做多shots实验
             for shot in shots:
+                report_shot = shot
+                if shot == 0:
+                    shot = 1
+                    args.num_updates = 0
+                else:
+                    args.num_updates = old_num_updates
                 test_pkl_path = "{}/task/LEAVE_ONE_FOR_TEST/{}/test_{}_adv_{}_tot_num_tasks_20000_way_2_shot_{}_query_15.pkl".format(PY_ROOT,
                                                 dataset_name,dataset_name,leave_adversary, shot)
-                meta_task_dataset = TaskDatasetForFinetune(tot_num_tasks, num_classes, shot, num_query,
+                meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, shot, num_query,
                                                            dataset_name, is_train=False,
                                                            pkl_task_dump_path=test_pkl_path,
-                                                           load_mode=LOAD_TASK_MODE.NO_LOAD,
+                                                           load_mode=LOAD_TASK_MODE.LOAD,
                                                            protocol=SPLIT_DATA_PROTOCOL.LEAVE_ONE_FOR_TEST,
-                                                            no_random_way=False,leave_out_attack_dir=leave_dir_path)  # FIXME
+                                                            no_random_way=True,leave_out_attack_dir=leave_dir_path)  # FIXME 注意一定填random??
                 data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
                 evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, args.num_updates)
-                result[dataset_name][shot] = evaluate_result
-            dataset_name = args.cross_domain_source + "--" + args.cross_domain_target
-            with open(os.path.dirname(model_path) + '/result@{}@leave_{}@test_update_{}@lr_{}.json'.format(dataset_name,
-                                                                                                     leave_adversary,
-                                                                                                     args.num_updates,
-                                                                                                     args.lr),
-                      "w") as file_obj:
-                file_obj.write(json.dumps(result))
-                file_obj.flush()
+                result[leave_adversary][report_shot] = evaluate_result
+    with open(os.path.dirname(model_path) + '/result_test_update_{}@lr_{}.json'.format(args.num_updates,
+                                                                                             args.lr),
+              "w") as file_obj:
+        file_obj.write(json.dumps(result))
+        file_obj.flush()
 
 def main_train_worker(args, model_path, META_ATTACKER_PART_I=None,META_ATTACKER_PART_II=None,gpu="0"):
     if META_ATTACKER_PART_I  is None:
@@ -309,7 +323,7 @@ def main_train_worker(args, model_path, META_ATTACKER_PART_I=None,META_ATTACKER_
     # val_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.arch), False,
     #                                  args.split_protocol)
 
-    val_dataset = TaskDatasetForFinetune(20000, 2, 1, 15,
+    val_dataset = MetaTaskDataset(20000, 2, 1, 15,
                                         args.dataset, is_train=False, pkl_task_dump_path=args.test_pkl_path,
                                         load_mode=LOAD_TASK_MODE.LOAD,
                                         protocol=args.split_protocol, no_random_way=True)
@@ -409,16 +423,16 @@ def train(train_loader,val_loader, model, criterion, optimizer, epoch, tensorboa
                 loss=losses, top1=top1, ))
 
             iter = epoch * len(train_loader) + i
-            evaluate_result = finetune_eval_task_accuracy(model, val_loader, 0, 0, 1000)
-            query_F1_tensor = torch.Tensor(1)
-            query_F1_tensor.fill_(evaluate_result["query_F1"])
-            tensorboard.record_val_query_F1(query_F1_tensor, iter)
-            print('Epoch: [{0}][{1}/{2}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\tValQueryF1 {query_F1:.3f}'.format(
-                epoch, i, len(train_loader), batch_time=batch_time,
-                loss=losses, top1=top1, query_F1=evaluate_result["query_F1"]))
+            # evaluate_result = finetune_eval_task_accuracy(model, val_loader, 0, 0, 1000)
+            # query_F1_tensor = torch.Tensor(1)
+            # query_F1_tensor.fill_(evaluate_result["query_F1"])
+            # tensorboard.record_val_query_F1(query_F1_tensor, iter)
+            # print('Epoch: [{0}][{1}/{2}]\t'
+            #       'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+            #       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+            #       'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\tValQueryF1 {query_F1:.3f}'.format(
+            #     epoch, i, len(train_loader), batch_time=batch_time,
+            #     loss=losses, top1=top1, query_F1=evaluate_result["query_F1"]))
 
 
 def validate(val_loader, model, criterion, args):

@@ -1,5 +1,6 @@
 import sys
 
+from dataset.task_dataset_for_finetune import TaskDatasetForFinetune
 from image_rotate_detector.image_rotate import ImageTransform
 from image_rotate_detector.rotate_detector import Detector
 from networks.conv3 import Conv3
@@ -11,7 +12,7 @@ from config import PY_ROOT, CLASS_NUM, IN_CHANNELS, IMAGE_SIZE
 from torch.optim import Adam,SGD
 from torch.utils.data import DataLoader
 from pytorch_MAML.inner_loop import InnerLoop
-from pytorch_MAML.meta_dataset import MetaTaskDataset
+from pytorch_MAML.meta_dataset import MetaTaskDataset, LOAD_TASK_MODE
 from networks.resnet import resnet10, resnet18
 from networks.shallow_convs import FourConvs
 from pytorch_MAML.score import *
@@ -123,83 +124,6 @@ class MetaLearner(object):
             h.remove()
 
 
-    def test_total_data(self, iter):
-        test_net = copy.deepcopy(self.network)
-        # Select ten tasks randomly from the test set to evaluate on
-        support_predicts, support_gt_labels, query_predicts, query_gt_labels = [], [], [], []
-        two_way_gt_position = []
-        meta_batch_size = 0
-        for support_images, support_labels, query_images, query_labels, positive_labels in self.val_loader:
-            if meta_batch_size == 0:
-                meta_batch_size = support_images.size(0)
-            assert meta_batch_size == support_images.size(0)
-            for task_idx in range(support_images.size(0)):  # 选择100个task
-                # Make a test net with same parameters as our current net
-                test_net.copy_weights(self.network)
-                test_net.cuda()
-                test_net.train()
-                test_opt = SGD(test_net.parameters(), lr=self.inner_step_size)
-                for i in range(self.num_inner_updates):  # 先fine_tune
-                    in_, target = support_images[task_idx].cuda(), support_labels[task_idx].cuda()
-                    loss, _  = forward_pass(test_net, in_, target)
-                    test_opt.zero_grad()
-                    loss.backward()
-                    test_opt.step()
-                test_net.eval()
-                # Evaluate the trained model on train and val examples
-                support_predict = get_net_predict(test_net, support_images[task_idx])
-                query_predict = get_net_predict(test_net, query_images[task_idx])
-                support_predicts.extend(support_predict)
-                query_predicts.extend(query_predict)
-                support_gt_labels.extend(support_labels[task_idx].detach().cpu().numpy())
-                query_gt_labels.extend(query_labels[task_idx].detach().cpu().numpy())
-                two_way_gt_position.extend(positive_labels[task_idx].detach().cpu().numpy())
-
-        support_predicts, query_predicts, support_gt_labels, query_gt_labels = np.array(support_predicts), np.array(query_predicts), np.array(support_gt_labels), np.array(query_gt_labels)
-        two_way_gt_position = np.array(two_way_gt_position)
-        support_acc_Nway = accuracy_score(support_gt_labels, support_predicts)
-        query_acc_Nway = accuracy_score(query_gt_labels, query_predicts)
-
-        two_way_gt_position = two_way_gt_position.reshape(len(self.val_loader) * meta_batch_size, 1)
-        support_predicts = support_predicts.reshape(len(self.val_loader) * meta_batch_size, -1)
-        query_predicts = query_predicts.reshape(len(self.val_loader) * meta_batch_size, -1)
-        support_gt_labels = support_gt_labels.reshape(len(self.val_loader) * meta_batch_size, -1)
-        query_gt_labels = query_gt_labels.reshape(len(self.val_loader) * meta_batch_size, -1)
-
-        support_predict_two = (support_predicts == two_way_gt_position).astype(np.int32)
-        support_gt_two = (support_gt_labels == two_way_gt_position).astype(np.int32)
-        query_predict_two = (query_predicts == two_way_gt_position).astype(np.int32)
-        query_gt_two = (query_gt_labels == two_way_gt_position).astype(np.int32)
-        support_acc_two_way = accuracy_score(support_gt_two, support_predict_two)
-        query_acc_two_way = accuracy_score(query_gt_two.reshape(-1), query_predict_two.rehape(-1))
-
-        result_json = {"support_acc_Nway": support_acc_Nway,
-                       "support_acc_2way": support_acc_two_way,
-                       "query_acc_Nway": query_acc_Nway,
-                       "query_acc_2way": query_acc_two_way}
-
-        if iter >= 0:
-            mquery_acc_tensor = torch.Tensor(1)
-            mquery_acc_tensor.fill_(query_acc_Nway)
-            self.tensorboard.record_val_query_F1(mquery_acc_tensor, iter)
-            msupport_acc_tensor = torch.Tensor(1)
-            msupport_acc_tensor.fill_(support_acc_Nway)
-            self.tensorboard.record_val_support_acc(msupport_acc_tensor, iter)
-            msupport_two_way_acc_tensor = torch.Tensor(1)
-            msupport_two_way_acc_tensor.fill_(support_acc_two_way)
-            self.tensorboard.record_val_support_twoway_acc(msupport_two_way_acc_tensor, iter)
-            mquery_two_way_acc_tensor = torch.Tensor(1)
-            mquery_two_way_acc_tensor.fill_(query_acc_two_way)
-            self.tensorboard.record_val_support_twoway_acc(mquery_two_way_acc_tensor, iter)
-
-        print('-------------------------')
-        print('Support acc:{} two-way acc: {}'.format(support_acc_Nway, support_acc_two_way))
-        print('Query acc:{} two-way acc: {}'.format(query_acc_Nway, query_acc_two_way))
-        print('-------------------------')
-        del test_net
-        return result_json
-
-    # TODO
     def test_task_accuracy_zero_shot(self, iter=0):
         test_net = copy.deepcopy(self.network)
         # Select ten tasks randomly from the test set to evaluate on
@@ -262,6 +186,9 @@ class MetaLearner(object):
                 test_net.cuda()
                 test_net.train()
                 test_opt = SGD(test_net.parameters(), lr=self.inner_step_size)
+                # for m in test_net.modules():
+                #     if isinstance(m, torch.nn.BatchNorm2d):
+                #         m.eval()
                 for i in range(self.num_inner_updates):  # 先fine_tune
                     finetune_img, finetune_target = support_images[task_idx].cuda(), support_labels[task_idx].cuda()
                     loss, _  = forward_pass(test_net, finetune_img, finetune_target)
@@ -272,8 +199,8 @@ class MetaLearner(object):
                 # print("---------")
                 test_net.eval()
                 # Evaluate the trained model on train and val examples
-                support_accuracy, support_F1 = evaluate(test_net, support_images[task_idx], support_labels[task_idx], positive_position[task_idx],use_positive_position=use_positive_position)
-                query_accuracy, query_F1 = evaluate(test_net, query_images[task_idx], query_labels[task_idx], positive_position[task_idx],use_positive_position=use_positive_position)
+                support_accuracy, support_F1 = evaluate(test_net, support_images[task_idx], support_labels[task_idx], positive_position[task_idx].item(),use_positive_position=use_positive_position)
+                query_accuracy, query_F1 = evaluate(test_net, query_images[task_idx], query_labels[task_idx], positive_position[task_idx].item(),use_positive_position=use_positive_position)
                 support_F1_list.append(support_F1)
                 query_F1_list.append(query_F1)
 

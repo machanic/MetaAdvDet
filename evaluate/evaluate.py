@@ -41,7 +41,8 @@ def finetune_eval_task_accuracy(network, val_loader, inner_lr, num_updates, limi
     meta_batch_size = 0
     test_net = copy.deepcopy(network)
     # support_images,support_gt_labels, support_binary_labels, query_images, query_gt_labels, query_binary_labels
-    for support_images, _, support_labels, query_images, _, query_labels, positive_labels in val_loader:
+    for val_idx, (support_images, support_labels, query_images, query_labels, positive_labels) in enumerate(val_loader):
+        # print("process task {}  task_batch={}".format(val_idx, len(support_images)))
         positive_labels = positive_labels.detach().cpu().numpy()
         support_labels = support_labels.detach().cpu().numpy()
         query_labels = query_labels.detach().cpu().numpy()
@@ -168,7 +169,7 @@ def leave_one_out_evaluate(args):
                               args.lr_decay_itr,
                               args.epoch, args.test_num_updates, args.load_task_mode, task_dump_path,
                               args.split_protocol, args.arch, args.tot_num_tasks, shot, args.num_query,
-                              args.no_random_way,
+                              True,
                               "", train=False, leave_out_attack_dir=leave_out_folder)
         learner.network.load_state_dict(checkpoint['state_dict'], strict=True)
         result_json  = learner.test_task_accuracy(-1, use_positive_position=True)
@@ -177,7 +178,7 @@ def leave_one_out_evaluate(args):
               "w") as file_obj:
         file_obj.write(json.dumps(report_result))
         file_obj.flush()
-
+    print("write to "+ "{}/train_pytorch_model/{}/{}_result.json".format(PY_ROOT, args.study_subject, dataset))
     return report_result
 
 
@@ -231,6 +232,8 @@ def ablation_study_evaluate(args):
     report_result = defaultdict(dict)
     str2bool = lambda v: v.lower() in ("yes", "true", "t", "1")
     for model_path in glob.glob("{}/train_pytorch_model/{}/MAML@*".format(PY_ROOT, args.study_subject)):
+        if str(args.split_protocol) not in model_path:
+            continue
         ma_prefix = extract_param_prefix.match(model_path)
         param_prefix = ma_prefix.group(1)
         ma = extract_pattern.match(model_path)
@@ -264,6 +267,8 @@ def ablation_study_evaluate(args):
             extract_key = "shots_{}_fixed_way_{}".format(num_support, fixe_way)
         elif args.study_subject == "query_size_ablation_study":
             extract_key = num_query
+        elif args.study_subject == "vs_deep_MAX":
+            extract_key = num_support
 
         if args.study_subject == "fine_tune_update_ablation_study": # 这个实验重做
             for test_num_updates in range(1,51):

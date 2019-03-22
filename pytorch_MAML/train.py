@@ -57,7 +57,6 @@ def main():
     # Set the gpu
     print('Setting GPU to', str(args.gpu))
 
-
     if not args.evaluate:
         args.task_dump_path = "{}/{}/{}".format(args.task_dump_path, args.split_protocol, args.dataset)
         param_prefix = "{}_{}@{}@epoch_{}@meta_batch_size_{}@way_{}@shot_{}@num_query_{}@num_updates_{}@lr_{}@inner_lr_{}@fixed_way_{}".format(
