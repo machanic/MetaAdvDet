@@ -1,7 +1,7 @@
 from collections import defaultdict
 import os
 import pickle
-
+from sklearn.metrics import f1_score
 class Fingerprints:
     def __init__(self):
         self.dx = None
@@ -39,7 +39,8 @@ class Stats:
         self.FP = set()
         self.FN = set()
         self.TN = set()
-
+        self.predition_list = list()
+        self.ground_truth_list = list()
         # Legal = there is a fingerprint match below threshold tau
         self.ids_legal = set()
 
@@ -77,9 +78,11 @@ class Stats:
         recall = 0.0
         if len(self.P) > 0:
             recall = len(TP) / float(len(self.P))
-        F1 = 0.0
-        if precision + recall > 0.0:
-            F1 = 2 * precision * recall / (precision + recall)
+        # F1 = 0.0
+        # if precision + recall > 0.0:
+        #     F1 = 2 * precision * recall / (precision + recall)
+
+        F1 = f1_score(self.ground_truth_list, self.predition_list)
         # Reject if not legal: model output does not match any fingerprint at threshold tau.
         # when does argmax f(x) == argmax f(x+dx)
         # when does y* == argmax f(x) == argmax f(x+dx)

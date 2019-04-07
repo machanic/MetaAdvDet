@@ -10,12 +10,12 @@ import glob
 from networks.shallow_convs import FourConvs
 from networks.resnet import resnet18, resnet10
 from config import IN_CHANNELS, IMAGE_SIZE, CLASS_NUM
-from pytorch_MAML.meta_dataset import MetaTaskDataset, SPLIT_DATA_PROTOCOL, LOAD_TASK_MODE
+from dataset.meta_task_dataset import MetaTaskDataset
+from dataset.protocol_enum import SPLIT_DATA_PROTOCOL, LOAD_TASK_MODE
 from torch.utils.data import DataLoader
 from torchvision.datasets import CIFAR10, MNIST, FashionMNIST
 from dataset.SVHN_dataset import SVHN
 import json
-import numpy as np
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('-b', '--batch_size', default=100, type=int,

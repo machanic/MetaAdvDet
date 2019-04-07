@@ -46,9 +46,9 @@ def bn_forward(self, x, conv_fc_module_to_name, param_dict):
 
 
 class MetaNetwork(nn.Module):
-    def __init__(self, network, img_size):
+    def __init__(self, network, img_size, in_channels):
         super(MetaNetwork, self).__init__()
-        self.channels = 3
+        self.channels = in_channels
         self.img_size = img_size
         self.network = network
         self.loss_fn = nn.CrossEntropyLoss()

@@ -20,7 +20,7 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.models as models
 from config import IMAGE_SIZE
-from pytorch_MAML.score import forward_pass
+from meta_adv_detector.score import forward_pass
 from config import IN_CHANNELS, CLASS_NUM
 import numpy as np
 from sklearn.metrics import accuracy_score
@@ -64,8 +64,8 @@ parser.add_argument('-p', '--print-freq', default=10, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
-parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
-                    help='evaluate model on validation set')
+parser.add_argument('-e', '--evaluate_accuracy', dest='evaluate_accuracy', action='store_true',
+                    help='evaluate_accuracy model on validation set')
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
                     help='use pre-trained model')
 parser.add_argument('--seed', default=None, type=int,
@@ -93,7 +93,7 @@ def main():
 
 
 
-    if not args.evaluate:  # not evaluate
+    if not args.evaluate:  # not evaluate_accuracy
         # Simply call main_worker function
         main_train_worker(args.gpu, args)
 
@@ -185,7 +185,7 @@ def main_train_worker(gpu, args):
         # train for one epoch
         train(train_loader, network, CLASS_NUM[args.dataset], optimizer, epoch, args)
 
-        # evaluate on validation set
+        # evaluate_accuracy on validation set
         acc1 = validate(val_loader, network, CLASS_NUM[args.dataset], args)
 
         # remember best acc@1 and save checkpoint
@@ -264,7 +264,7 @@ def validate(val_loader, model, num_classes, args):
     top1 = AverageMeter()
     # top5 = AverageMeter()
 
-    # switch to evaluate mode
+    # switch to evaluate_accuracy mode
     model.eval()
 
     with torch.no_grad():

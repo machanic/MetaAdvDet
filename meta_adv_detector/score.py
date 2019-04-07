@@ -30,6 +30,24 @@ def forward_pass(net, in_, target, weights=None):
     loss = net.loss_fn(out, target_var)
     return loss, out
 
+def forward_pass_rotate_random_angle(net, in_, target):
+    ''' forward in_ through the net, return loss and output '''
+    input_var = in_.cuda(async=True)
+    target_var = target.cuda(async=True)
+    out = net.net_forward(input_var, True)
+    loss = net.loss_fn(out, target_var)
+    return loss, out
+
+def evaluate_two_way_random_angle(net, x, target):
+    x = x.cuda()
+    target = target.cuda()
+    with torch.no_grad():
+        _, out = forward_pass_rotate_random_angle(net, x, target)
+    predict = np.argmax(out.detach().cpu().numpy(), axis=1)
+    target = target.detach().cpu().numpy()
+    F1 = f1_score(target, predict)
+    accuracy = accuracy_score(target, predict)
+    return accuracy, F1
 
 def evaluate_two_way(net, x, target):
     x = x.cuda()

@@ -20,7 +20,7 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.models as models
 from config import IMAGE_SIZE
-from pytorch_MAML.score import forward_pass
+from meta_adv_detector.score import forward_pass
 from config import IN_CHANNELS, CLASS_NUM
 import numpy as np
 from sklearn.metrics import accuracy_score
@@ -64,8 +64,8 @@ parser.add_argument('-p', '--print-freq', default=10, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
-parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
-                    help='evaluate model on validation set')
+parser.add_argument('-e', '--evaluate_accuracy', dest='evaluate_accuracy', action='store_true',
+                    help='evaluate_accuracy model on validation set')
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
                     help='use pre-trained model')
 parser.add_argument('--seed', default=None, type=int,
@@ -92,7 +92,7 @@ def main():
 
 
 
-    if not args.evaluate:  # not evaluate
+    if not args.evaluate:  # not evaluate_accuracy
         # Simply call main_worker function
         main_train_worker(args.gpu, args)
 
@@ -133,14 +133,13 @@ def main_train_worker(gpu, args):
     model_path = './train_pytorch_model/DL_IMAGE_CLASSIFIER_{}@{}@epoch_{}@lr_{}@batch_{}.pth.tar'.format(
         args.dataset, args.arch, args.epochs, args.lr, args.batch_size)
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
-    preprocessor = get_preprocessor(input_size=IMAGE_SIZE[args.dataset])
+    preprocessor = get_preprocessor(IN_CHANNELS[args.dataset])
     network.cuda()
 
     # define loss function (criterion) and optimizer
     image_classifier_loss = nn.CrossEntropyLoss().cuda()
 
-    optimizer = torch.optim.SGD(network.parameters(), args.lr,
-                                momentum=args.momentum,
+    optimizer = torch.optim.Adam(network.parameters(), args.lr,
                                 weight_decay=args.weight_decay)
     # optionally resume from a checkpoint
     if args.resume:
@@ -149,7 +148,7 @@ def main_train_worker(gpu, args):
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint['epoch']
             network.load_state_dict(checkpoint['state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
+            # optimizer.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
@@ -179,15 +178,15 @@ def main_train_worker(gpu, args):
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
-    for epoch in range(args.start_epoch, args.epochs):
+    for epoch in range(0, args.epochs):
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
         train(train_loader, network, image_classifier_loss, optimizer, epoch, args)
 
-        # evaluate on validation set
+        # evaluate_accuracy on validation set
         acc1 = validate(val_loader, network, image_classifier_loss, args)
-
+        print(acc1)
         # remember best acc@1 and save checkpoint
 
         save_checkpoint({
@@ -252,7 +251,7 @@ def validate(val_loader, model, criterion, args):
     top1 = AverageMeter()
     # top5 = AverageMeter()
 
-    # switch to evaluate mode
+    # switch to evaluate_accuracy mode
     model.eval()
 
     with torch.no_grad():

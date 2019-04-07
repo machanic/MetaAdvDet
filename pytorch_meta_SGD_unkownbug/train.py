@@ -49,7 +49,7 @@ def parse_args():
     parser.add_argument('--resume', action='store_true',help='resume training if there is a model available')
     parser.add_argument('--train', action='store_true', help='True to train, False to test.')
     parser.add_argument('--test_set', action='store_true', help='Set to true to test on the the test set, False for the validation set.')
-    parser.add_argument("--evaluate", action="store_true", help="the evaluate procedure")
+    parser.add_argument("--evaluate_accuracy", action="store_true", help="the evaluate_accuracy procedure")
     parser.add_argument("--train_update_batch_size", type=int,default=-1,
                         help="number of examples used for gradient update during training (use if you want to test with a different number).")
     parser.add_argument("--train_update_lr", type=int,default=-1,
@@ -140,7 +140,7 @@ def main_worker(args):
 
         # 分为pretrain和train阶段，pretrain阶段用support loss， train阶段用query loss
         train(train_loader, val_dataset, maml, optimizer, epoch, args, exp_string, prelosses, postlosses)
-        # evaluate on validation set
+        # evaluate_accuracy on validation set
         means = validate(val_dataset, maml, args)
 
         torch.save({
@@ -211,7 +211,7 @@ def train(train_loader, val_dataset, model, optimizer, epoch, args, exp_string, 
 
 
 def validate(npy_dataset, model, args):
-    # switch to evaluate mode
+    # switch to evaluate_accuracy mode
     model.eval()
     model.num_updates = args.test_num_updates
     np.random.seed(1)

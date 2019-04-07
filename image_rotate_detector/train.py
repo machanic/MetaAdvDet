@@ -1,13 +1,18 @@
 import sys
-from collections import defaultdict
 
 
 sys.path.append("/home1/machen/adv_detection_meta_learning")
+
+from image_rotate_detector.evaluation.cross_arch_evaluation import evaluate_cross_arch
+from image_rotate_detector.evaluation.cross_domain_evaluation import evaluate_cross_domain
+from image_rotate_detector.evaluation.finetune_evaluation import evaluate_finetune
+from image_rotate_detector.evaluation.shots_evaluation import evaluate_shots
+from image_rotate_detector.evaluation.white_box_evaluation import evaluate_whitebox_attack
+from image_rotate_detector.evaluation.zero_shot_evaluation import evaluate_zero_shot
 from networks.conv3 import Conv3
 from torch.utils.data import DataLoader
 import config
 from dataset.deep_learning_adversary_dataset import AdversaryDataset
-from evaluate.evaluate import finetune_eval_task_accuracy
 import argparse
 import os
 import random
@@ -23,25 +28,17 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.models as models
 from config import IMAGE_SIZE, IMAGE_DATA_ROOT
-from pytorch_MAML.score import forward_pass
-import json
+from meta_adv_detector.score import forward_pass
 from config import IN_CHANNELS, CLASS_NUM
-from pytorch_MAML.meta_dataset import SPLIT_DATA_PROTOCOL, MetaTaskDataset, LOAD_TASK_MODE
+from dataset.protocol_enum import SPLIT_DATA_PROTOCOL, LOAD_TASK_MODE
 import numpy as np
 from sklearn.metrics import accuracy_score
 from image_rotate_detector.rotate_detector import Detector
-from image_rotate_detector.image_rotate import ImageTransform
+from image_rotate_detector.image_rotate import ImageTransformTorch
+from image_rotate_detector.image_rotate import ImageTransformCV2
+
 from config import PY_ROOT
-import glob
 import re
-import multiprocessing as mp
-
-class Identity(nn.Module):
-    def __init__(self):
-        super(Identity, self).__init__()
-    def forward(self, x):
-        return x
-
 
 # 整个程序分两步走:1. 先训练一个图像分类器，分类用原始的gt label; 2.再训练一个 detector，锁定图像分类器的weight
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
@@ -67,26 +64,34 @@ parser.add_argument('-p', '--print-freq', default=10, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
-parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
-                    help='evaluate model on validation set')
+parser.add_argument('-e', '--evaluate_accuracy', dest='evaluate_accuracy', action='store_true',
+                    help='evaluate_accuracy model on validation set')
+parser.add_argument("--evaluate", action="store_true", help="evaluation_toolkit mode")
 parser.add_argument('--seed', default=None, type=int,
                     help='seed for initializing training. ')
 parser.add_argument("--gpus", nargs='+', action='append', help="used for multi_process")
 parser.add_argument("--protocol", required=True,
                     type=SPLIT_DATA_PROTOCOL, choices=list(SPLIT_DATA_PROTOCOL), help="split data protocol")
 parser.add_argument("--task_path", type=str, default=PY_ROOT+"/task/TRAIN_I_TEST_II/train_CIFAR-10_tot_num_tasks_20000_metabatch_10_way_5_shot_5_query_15.pkl", help="the task dump path")
-parser.add_argument("--shot",type=int)
-parser.add_argument("--fix_cnn", action="store_true", help="whether to fix cnn's parameter")
-parser.add_argument("--num_updates",type=int,default=1)
+parser.add_argument("--shot",type=int, default=1)
+parser.add_argument("--num_updates",type=int,default=20)
 parser.add_argument("--balance",action="store_true")
+parser.add_argument("--cross_domain_source", type=str)
+parser.add_argument("--cross_domain_target", type=str)
+parser.add_argument("--cross_arch_source", type=str)
+parser.add_argument("--cross_arch_target", type=str)
 parser.add_argument("--dataset",type=str, default="CIFAR-10")
 parser.add_argument("--gpu", type=str, default="2")
+parser.add_argument("--adv_arch",default="conv3",type=str)
+parser.add_argument("--load_mode", default=LOAD_TASK_MODE.LOAD,  type=LOAD_TASK_MODE, choices=list(LOAD_TASK_MODE), help="load mode")
+parser.add_argument("--study_subject", type=str)
+parser.add_argument("--eval_update_BN", action="store_true")
+parser.add_argument("--use_cv_transform", action="store_true")
 best_acc1 = 0
 
 
 def main():
     args = parser.parse_args()
-
     if args.seed is not None:
         random.seed(args.seed)
         torch.manual_seed(args.seed)
@@ -96,16 +101,23 @@ def main():
                       'which can slow down your training considerably! '
                       'You may see unexpected behavior when restarting '
                       'from checkpoints.')
-    if not args.evaluate:  # not evaluate
+    if not args.evaluate:  # not evaluate_accuracy
         # Simply call main_worker function
-        if args.protocol == SPLIT_DATA_PROTOCOL.LEAVE_ONE_FOR_TEST:
-            train_for_leave_one(args)
-        else:
-            main_train_worker(args)
-    else:
-        test_for_task_accuracy(args)
+        main_train_worker(args)
+    elif args.study_subject == "shots":
+        evaluate_shots(args)
+    elif args.study_subject == "cross_domain":
+        evaluate_cross_domain(args)
+    elif args.study_subject == "finetune":
+        evaluate_finetune(args)
+    elif args.study_subject == "cross_arch":
+        evaluate_cross_arch(args)
+    elif args.study_subject == "white_box":
+        evaluate_whitebox_attack(args)
+    elif args.study_subject == "zero_shot":
+        evaluate_zero_shot(args)
 
-def evaluate(net, in_,  target_positive, weights=None):
+def evaluate_accuracy(net, in_, target_positive, weights=None):
     # in_ is one task's 5-way k-shot data, in_ is either support data or query data
     in_ = in_.cuda()
     batch_size = in_.detach().cpu().numpy().shape[0]
@@ -115,171 +127,6 @@ def evaluate(net, in_,  target_positive, weights=None):
     two_way_accuracy = accuracy_score(predict, target_positive.detach().cpu().numpy().reshape(-1))
     return float(loss) / in_.size(0), two_way_accuracy
 
-def leave_out_evaluate(args):
-    print("Use GPU: {} for training".format(args.gpu))
-    extract_pattern_detail = re.compile(".*?DL_DET@(.*?)@leave_(.*?)@.*?@epoch_(\d+).*")
-    # /home1/machen/adv_detection_meta_learning/task/TRAIN_I_TEST_II/CIFAR-10/train_CIFAR-10_tot_num_tasks_20000_way_2_shot_1_query_15.pkl
-    extract_pkl = re.compile(".*?tot_num_tasks_(\d+)_way_(\d+)_shot_(.*?)_query_(\d+).*")
-    result = defaultdict(dict)
-    old_num_updates = args.num_updates
-    for model_path in glob.glob("{}/train_pytorch_model/DL_DET/LeaveOneOut/DL_DET@*".format(PY_ROOT)):
-        print("evaluate model :{}".format(os.path.basename(model_path)))
-        ma = extract_pattern_detail.match(model_path)
-        leave_adversary = ma.group(2)
-        dataset_name = ma.group(1)
-        leave_dir_path = config.LEAVE_ONE_OUT_DATA_ROOT[dataset_name] + "/{}".format(leave_adversary)
-        lr = args.lr
-        network = build_network(args.dataset, "conv-3", model_path)
-        detector_loss = nn.CrossEntropyLoss().cuda()  # 输入的x和y要有相同的shape
-        layer_number = 3
-        image_transform = ImageTransform(dataset_name, [1, 2])
-        detector = Detector(dataset_name, network, CLASS_NUM[dataset_name], image_transform, layer_number,
-                            args.fix_cnn)
-        model = network
-        model = model.cuda()
-        checkpoint = torch.load(model_path, map_location=lambda storage, location: storage)
-        model.load_state_dict(checkpoint['state_dict'])
-        print("=> loaded checkpoint '{}' (epoch {})"
-              .format(model_path, checkpoint['epoch']))
-        extract_pkl_ma = extract_pkl.match(args.test_pkl_path)
-        tot_num_tasks = int(extract_pkl_ma.group(1))
-        num_classes = int(extract_pkl_ma.group(2))
-        num_support = int(extract_pkl_ma.group(3))
-        num_query = int(extract_pkl_ma.group(4))
-
-        shots = [0, 1, 5]  # cross domain用1,5 -shot
-
-        if args.num_updates >= 0:  # 做多shots实验
-            for shot in shots:
-                report_shot = shot
-                if shot == 0:
-                    shot = 1
-                    args.num_updates = 0
-                else:
-                    args.num_updates = old_num_updates
-                test_pkl_path = "{}/task/LEAVE_ONE_FOR_TEST/{}/test_{}_adv_{}_tot_num_tasks_20000_way_2_shot_{}_query_15.pkl".format(PY_ROOT,
-                                                dataset_name,dataset_name,leave_adversary, shot)
-                meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, shot, num_query,
-                                                           dataset_name, is_train=False,
-                                                           pkl_task_dump_path=test_pkl_path,
-                                                           load_mode=LOAD_TASK_MODE.LOAD,
-                                                           protocol=SPLIT_DATA_PROTOCOL.LEAVE_ONE_FOR_TEST,
-                                                            no_random_way=False,leave_out_attack_dir=leave_dir_path)  # FIXME
-                data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
-                evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, args.num_updates)
-                result[leave_adversary][report_shot] = evaluate_result
-    with open(os.path.dirname(model_path) + '/result_test_update_{}@lr_{}.json'.format(args.num_updates,
-                                                                                             args.lr),
-              "w") as file_obj:
-        file_obj.write(json.dumps(result))
-        file_obj.flush()
-
-
-def train_for_leave_one(args):
-    all_adversaries = config.META_ATTACKER_PART_I + config.META_ATTACKER_PART_II
-    all_adversaries = list(set(all_adversaries))
-    all_adversaries.remove("clean")
-    pool = mp.Pool(processes=7)
-    dataset = args.dataset
-    for idx, leave_adversary in enumerate(all_adversaries):
-        config.META_ATTACKER_PART_I.clear()
-        config.META_ATTACKER_PART_II.clear()
-        for adversary in all_adversaries:
-            if leave_adversary != adversary:
-                config.META_ATTACKER_PART_I.append(adversary)
-        config.META_ATTACKER_PART_II.append(leave_adversary)
-        config.META_ATTACKER_PART_I.append("clean")
-        config.META_ATTACKER_PART_II.append("clean")
-        attack_name = leave_adversary
-        img_classifier_model_path = "{}/train_pytorch_model/DL_IMAGE_CLASSIFIER_{}@conv3@epoch_40@lr_0.0001@batch_500.pth.tar".format(PY_ROOT,dataset)
-        img_classifier_network = build_network(dataset, "conv3", img_classifier_model_path)
-        image_transform = ImageTransform(dataset, [1, 2])
-        detector = Detector(dataset, img_classifier_network, CLASS_NUM[dataset], image_transform, 3,
-                            False)
-
-        optimizer = torch.optim.SGD(detector.parameters(), args.lr,
-                                    momentum=args.momentum,
-                                    weight_decay=args.weight_decay)
-
-        param_prefix = "{}@leave_{}@{}@epoch_{}@batch_size_{}@lr_{}@balance_{}".format(
-            args.dataset,
-            attack_name, "conv3", args.epochs, args.batch_size, args.lr, args.balance)
-        model_path = '{}/train_pytorch_model/ROTATE_DET/LeaveOneOut/ROTATE_DET@{}.pth.tar'.format(
-            PY_ROOT,
-            param_prefix)
-        if os.path.exists(model_path):
-            checkpoint = torch.load(model_path, map_location=lambda storage, loc: storage)
-            detector.load_state_dict(checkpoint['state_dict'])
-            args.start_epoch = checkpoint["epoch"]
-            print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(model_path, checkpoint['epoch']))
-        os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        gpus = ["0", "2", "3","8"]
-        args.gpu = gpus[idx % len(gpus)]
-        print("using GPU:{}".format(args.gpu))
-        # main_train_worker(args, model_path, config)
-
-        train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[dataset] + "/adversarial_images/{}".format("conv3"), True,
-                                         SPLIT_DATA_PROTOCOL.TRAIN_I_TEST_II, config.META_ATTACKER_PART_I, config.META_ATTACKER_PART_II,
-                                         balance=args.balance)
-        train_loader = torch.utils.data.DataLoader(
-            train_dataset, batch_size=args.batch_size, shuffle=True,
-            num_workers=0, pin_memory=True)
-        # train_epochs(model_path, train_loader, detector, optimizer, "conv3", args, args.gpu)
-        pool.apply_async(train_epochs, args=(model_path, train_loader, detector, optimizer, "conv3", args, args.gpu))
-    pool.close()
-    pool.join()
-
-def test_for_task_accuracy(args):
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpus[0][0])
-    # IMG_ROTATE_DET@CIFAR-10@conv4@epoch_3@lr_0.001@batch_100@fix_cnn_params@traindata_TRAIN_I_TEST_II|train_CIFAR-10_tot_num_tasks_20000_metabatch_10_way_5_shot_5_query_15.pth.tar
-    extract_pattern_detail = re.compile(
-        ".*?IMG_ROTATE_DET@(.*?)_(.*?)@(.*?)@epoch_(\d+)@lr_(.*?)@batch_(\d+)@(.*?).*")
-    result = defaultdict(dict)
-    for model_path in glob.glob("{}/train_pytorch_model/ROTATE_DET/IMG_ROTATE_DET*".format(PY_ROOT)):
-        ma = extract_pattern_detail.match(model_path)
-        dataset = ma.group(1)
-        split_protocol = SPLIT_DATA_PROTOCOL[ma.group(2)]
-        arch = ma.group(3)
-        epoch = int(ma.group(4))
-        lr = float(ma.group(5))
-        batch_size = int(ma.group(6))
-        test_data_file_name = "{}/task/{}/{}/test_{}_tot_num_tasks_20000_way_2_shot_{}_query_15.pkl".format(PY_ROOT, split_protocol, dataset,dataset, args.shot)
-        print("evaluate model :{}".format(os.path.basename(model_path)))
-        num_support = args.shot
-        key = num_support
-        tot_num_tasks = 20000
-        num_classes = 2
-
-        num_query = 15
-        meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
-                                            dataset, is_train=False, load_mode=LOAD_TASK_MODE.LOAD,
-                                            pkl_task_dump_path=test_data_file_name,
-                                            protocol=split_protocol, no_random_way=True)
-        data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
-
-        if arch == "resnet10":
-            img_classifier_network = resnet10(num_classes=CLASS_NUM[dataset],
-                                              in_channels=IN_CHANNELS[dataset])
-        elif arch == "resnet18":
-            img_classifier_network = resnet18(num_classes=CLASS_NUM[dataset],
-                                              in_channels=IN_CHANNELS[dataset])
-        elif arch == "conv3":
-            img_classifier_network = Conv3(IN_CHANNELS[dataset], IMAGE_SIZE[dataset],
-                                               CLASS_NUM[dataset])
-        image_transform = ImageTransform(dataset, [1, 2])
-        model = Detector(dataset, img_classifier_network, CLASS_NUM[dataset],image_transform, 3, False,num_classes=2)
-        checkpoint = torch.load(model_path, map_location=lambda storage, location: storage)
-        model.load_state_dict(checkpoint['state_dict'])
-        model.cuda()
-        print("=> loaded checkpoint '{}' (epoch {})"
-              .format(model_path, checkpoint['epoch']))
-        evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, args.num_updates)
-        result[dataset][key] = evaluate_result
-        with open(os.path.dirname(model_path) + '/IMG_ROTATE_DET_report.txt', "w") as file_obj:
-            file_obj.write(json.dumps(result))
-            file_obj.flush()
 
 def build_network(dataset, arch, model_path):
     assert os.path.exists(model_path), "{} not exists!".format(model_path)
@@ -305,68 +152,52 @@ def build_network(dataset, arch, model_path):
 def main_train_worker(args):
     global best_acc1
     # create model
-    pool = mp.Pool(processes=5)
     # DL_IMAGE_CLASSIFIER_MNIST@resnet10@epoch_20@lr_0.0001@batch_500.pth.tar
     extract_info_pattern = re.compile(".*?DL_IMAGE_CLASSIFIER_(.*?)@(.*?)@epoch_(\d+)@lr_(.*?)@batch_(\d+).pth.tar")
     idx = 0
     # val_txt_task_path = glob.glob("{}/task/{}/{}/test_*.txt".format(PY_ROOT,args.split_data_protocol, dataset))[0]
-    for img_classifier_model_path in glob.glob("{}/train_pytorch_model/DL_IMAGE_CLASSIFIER_*".format(PY_ROOT)):
-        ma = extract_info_pattern.match(img_classifier_model_path)
-        dataset, arch  = ma.group(1), ma.group(2)
-        if args.protocol != SPLIT_DATA_PROTOCOL.TRAIN_ALL_TEST_ALL:
-            if dataset == "CIFAR-10":
-                continue
-        fix_str = "no_fix_cnn_params"
-        if args.fix_cnn:
-            fix_str = "fix_cnn_params"
-        detector_model_path = '{}/train_pytorch_model/ROTATE_DET/IMG_ROTATE_DET@{}_{}@{}@epoch_{}@lr_{}@batch_{}@{}.pth.tar'.format(
-            PY_ROOT, dataset,args.protocol, arch, args.epochs, args.lr, args.batch_size, fix_str)
-        os.makedirs(os.path.dirname(detector_model_path),exist_ok=True)
-        gpus = args.gpus[0]
-        gpu = gpus[idx % len(gpus)]
-        print("use GPU {}".format(gpu))
-        idx += 1
-        train_detector(gpu, arch, img_classifier_model_path, detector_model_path, dataset, args)
+    img_classifier_model_path = "{}/train_pytorch_model/DL_IMAGE_CLASSIFIER_{}@conv3@epoch_40@lr_0.0001@batch_500.pth.tar".format(PY_ROOT, args.dataset)
+    ma = extract_info_pattern.match(img_classifier_model_path)
+    arch  = ma.group(2)
+    gpus = args.gpus[0]
+    gpu = gpus[idx % len(gpus)]
+    idx += 1
+    train_detector(gpu, arch, args.adv_arch, img_classifier_model_path, args.dataset, args)
 
 
-def train_detector(gpu, arch, img_classifier_model_path, detector_model_path,
+def train_detector(gpu, arch, adv_data_arch, img_classifier_model_path,
                     dataset, args):
     print("using GPU {}".format(gpu))
-
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu)
 
     img_classifier_network = build_network(dataset, arch, img_classifier_model_path)
-    layer_number = 3 if dataset in ["CIFAR-10","CIFAR-100"] else  2
+    layer_number = 3 if dataset in ["CIFAR-10","CIFAR-100","SVHN"] else  2
 
-    if args.fix_cnn:
-        for param in img_classifier_network.parameters():
-            param.requires_grad = False  # freeze the network parameters
-    image_transform = ImageTransform(dataset, [1,2])
-    detector = Detector(dataset, img_classifier_network, CLASS_NUM[dataset], image_transform, layer_number, args.fix_cnn)
-    detector.cuda()
-    if args.fix_cnn:
-        optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, detector.parameters()), args.lr,
-                                    momentum=args.momentum,
-                                    weight_decay=args.weight_decay)
+
+    fix_str = "no_fix_cnn_params"
+    if args.use_cv_transform:
+        image_transform = ImageTransformCV2(dataset, [1, 2])
+        detector_model_path = '{}/train_pytorch_model/ROTATE_DET/cv2_rotate_model/IMG_ROTATE_DET@{}_{}@model_{}@data_{}@epoch_{}@lr_{}@batch_{}@{}.pth.tar'.format(
+            PY_ROOT, args.dataset, args.protocol, arch, args.adv_arch, args.epochs, args.lr, args.batch_size, fix_str)
+        os.makedirs(os.path.dirname(detector_model_path), exist_ok=True)
     else:
-        optimizer = torch.optim.SGD(detector.parameters(), args.lr,
-                                    momentum=args.momentum,
-                                    weight_decay=args.weight_decay)
+        image_transform = ImageTransformTorch(dataset,[5,15])
+        detector_model_path = '{}/train_pytorch_model/ROTATE_DET/IMG_ROTATE_DET@{}_{}@model_{}@data_{}@epoch_{}@lr_{}@batch_{}@{}.pth.tar'.format(
+            PY_ROOT, args.dataset, args.protocol, arch, args.adv_arch, args.epochs, args.lr, args.batch_size, fix_str)
+        os.makedirs(os.path.dirname(detector_model_path), exist_ok=True)
+
+    detector = Detector(dataset, img_classifier_network, CLASS_NUM[dataset], image_transform, layer_number, False)
+    detector.cuda()
+    optimizer = torch.optim.SGD(detector.parameters(), args.lr,
+                                momentum=args.momentum,
+                                weight_decay=args.weight_decay)
     cudnn.benchmark = True
-    train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[dataset] + "/adversarial_images/{}".format(arch), True,
-                                     SPLIT_DATA_PROTOCOL.TRAIN_I_TEST_II, config.META_ATTACKER_PART_I, config.META_ATTACKER_PART_II,balance=args.balance)
+    train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[dataset] + "/adversarial_images/{}".format(adv_data_arch), True,
+                                     args.protocol, config.META_ATTACKER_PART_I, config.META_ATTACKER_PART_II,balance=args.balance)
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
         num_workers=0, pin_memory=True)
-    if os.path.exists(detector_model_path):
-        checkpoint = torch.load(detector_model_path, map_location=lambda storage, loc: storage)
-        detector.load_state_dict(checkpoint['state_dict'])
-        args.start_epoch = checkpoint["epoch"]
-        print("=> loaded checkpoint '{}' (epoch {})"
-              .format(detector_model_path, checkpoint['epoch']))
-    # val_dataset = TaskDatasetForDetector(IMAGE_SIZE[dataset],IN_CHANNELS[dataset],val_task_data_path, True)
-    # val_loader = torch.utils.data.DataLoader(
-    #     val_dataset, batch_size=args.batch_size, shuffle=True,
-    #     num_workers=args.workers, pin_memory=True)
     train_epochs(detector_model_path, train_loader, detector, optimizer, arch, args, args.gpu)
 
 def train_epochs(detector_model_path, train_loader, detector, optimizer, arch, args, gpu):
@@ -442,7 +273,7 @@ def validate(val_loader, model, criterion, args):
     top1 = AverageMeter()
     # top5 = AverageMeter()
 
-    # switch to evaluate mode
+    # switch to evaluate_accuracy mode
     model.eval()
 
     with torch.no_grad():

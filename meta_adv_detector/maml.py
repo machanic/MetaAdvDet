@@ -1,40 +1,34 @@
 import sys
 
-from dataset.task_dataset_for_finetune import TaskDatasetForFinetune
-from image_rotate_detector.image_rotate import ImageTransform
-from image_rotate_detector.rotate_detector import Detector
 from networks.conv3 import Conv3
 
 sys.path.append("/home1/machen/adv_detection_meta_learning")
 import os
 import copy
-from config import PY_ROOT, CLASS_NUM, IN_CHANNELS, IMAGE_SIZE
+from config import PY_ROOT, IN_CHANNELS, IMAGE_SIZE
 from torch.optim import Adam,SGD
 from torch.utils.data import DataLoader
-from pytorch_MAML.inner_loop import InnerLoop
-from pytorch_MAML.meta_dataset import MetaTaskDataset, LOAD_TASK_MODE
+from meta_adv_detector.inner_loop import InnerLoop
+from dataset.meta_task_dataset import MetaTaskDataset
 from networks.resnet import resnet10, resnet18
-from networks.shallow_convs import FourConvs
-from pytorch_MAML.score import *
+from meta_adv_detector.score import *
 
-from pytorch_MAML.tensorboard_helper import TensorBoardWriter
-
-from sklearn.metrics import accuracy_score
+from meta_adv_detector.tensorboard_helper import TensorBoardWriter
 
 
 class MetaLearner(object):
     def __init__(self,
-                 dataset_name,
+                 dataset,
                  num_classes,
                  meta_batch_size,
                  meta_step_size,
                  inner_step_size, lr_decay_itr,
                  epoch,
-                 num_inner_updates, load_task_mode, task_dump_path, split_data_protocol, arch,
+                 num_inner_updates, load_task_mode, protocol, arch,
                  tot_num_tasks, num_support, num_query, no_random_way,
-                 tensorboard_data_prefix, train=True, leave_out_attack_dir=None):
+                 tensorboard_data_prefix, train=True, adv_arch="conv3",rotate=False,need_val=False):
         super(self.__class__, self).__init__()
-        self.dataset_name = dataset_name
+        self.dataset = dataset
         self.num_classes = num_classes
         self.meta_batch_size = meta_batch_size  # task number per batch
         self.meta_step_size = meta_step_size
@@ -42,12 +36,11 @@ class MetaLearner(object):
         self.lr_decay_itr = lr_decay_itr
         self.epoch = epoch
         self.num_inner_updates = num_inner_updates
-
+        self.test_finetune_updates = num_inner_updates
         # Make the nets
-        img_size = IMAGE_SIZE[self.dataset_name]
         if arch == "conv3":
             # network = FourConvs(IN_CHANNELS[self.dataset_name], IMAGE_SIZE[self.dataset_name], num_classes)
-            network = Conv3(IN_CHANNELS[self.dataset_name],IMAGE_SIZE[self.dataset_name], num_classes)
+            network = Conv3(IN_CHANNELS[self.dataset], IMAGE_SIZE[self.dataset], num_classes)
         elif arch == "resnet10":
             network = resnet10(num_classes, pretrained=False)
         elif arch == "resnet18":
@@ -55,42 +48,20 @@ class MetaLearner(object):
         self.network = network
         self.network.cuda()
         if train:
-            if leave_out_attack_dir:
-                adversary = leave_out_attack_dir.split("/")[-1]
-                train_task_dump_path = task_dump_path + "/train_{}_adv_{}_tot_num_tasks_{}_way_{}_shot_{}_query_{}.pkl".format(
-                    dataset_name, adversary,
-                    tot_num_tasks,
-                    num_classes, num_support, num_query)
-            else:
-                train_task_dump_path = task_dump_path + "/train_{}_tot_num_tasks_{}_way_{}_shot_{}_query_{}.pkl".format(dataset_name,
-                                                                                                   tot_num_tasks,
-                                                                                                   num_classes, num_support, num_query)
-            os.makedirs(task_dump_path, exist_ok=True)
             trn_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
-                                          dataset_name, is_train=True, load_mode=load_task_mode,
-                                          pkl_task_dump_path=train_task_dump_path, protocol=split_data_protocol,
-                                          no_random_way=no_random_way, leave_out_attack_dir=leave_out_attack_dir)
+                                          dataset, is_train=True, load_mode=load_task_mode,
+                                          protocol=protocol,
+                                          no_random_way=no_random_way, adv_arch=adv_arch,rotate=rotate)
             self.train_loader = DataLoader(trn_dataset, batch_size=meta_batch_size, shuffle=True, num_workers=0, pin_memory=True)
             self.tensorboard = TensorBoardWriter("{0}/pytorch_MAML_tensorboard".format(PY_ROOT),
                                                  tensorboard_data_prefix)
             os.makedirs("{0}/pytorch_MAML_tensorboard".format(PY_ROOT), exist_ok=True)
-
-        if leave_out_attack_dir:
-            adversary = leave_out_attack_dir.split("/")[-1]
-            test_task_dump_path = task_dump_path + "/test_{}_adv_{}_tot_num_tasks_{}_way_{}_shot_{}_query_{}.pkl".format(
-                dataset_name, adversary,
-                tot_num_tasks,
-                num_classes, num_support, num_query)
-        else:
-            test_task_dump_path = task_dump_path + "/test_{}_tot_num_tasks_{}_way_{}_shot_{}_query_{}.pkl".format(dataset_name,
-                                                                                            tot_num_tasks,
-                                                                                               num_classes,num_support,num_query)
-        val_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
-                                      dataset_name, is_train=False, load_mode=load_task_mode,
-                                      pkl_task_dump_path=test_task_dump_path, protocol=split_data_protocol,
-                                      no_random_way=no_random_way, leave_out_attack_dir=leave_out_attack_dir)
-        print("using {} to evaluate F1 score".format(test_task_dump_path))
-        self.val_loader = DataLoader(val_dataset, batch_size=100, shuffle=False, num_workers=0, pin_memory=True) # 固定100个task，分别测每个task的准确率
+        if need_val:
+            val_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, 15,
+                                          dataset, is_train=False, load_mode=load_task_mode,
+                                          protocol=protocol,
+                                          no_random_way=True, adv_arch=adv_arch,rotate=rotate)
+            self.val_loader = DataLoader(val_dataset, batch_size=100, shuffle=False, num_workers=0, pin_memory=True) # 固定100个task，分别测每个task的准确率
         self.fast_net = InnerLoop(self.network, self.num_inner_updates,
                                   self.inner_step_size, self.meta_batch_size)  # 并行执行每个task
         self.fast_net.cuda()
@@ -124,62 +95,61 @@ class MetaLearner(object):
             h.remove()
 
 
-    def test_task_accuracy_zero_shot(self, iter=0):
+    def test_zero_shot_with_finetune_trainset(self):
         test_net = copy.deepcopy(self.network)
-        # Select ten tasks randomly from the test set to evaluate on
-        support_F1_list, query_F1_list = [], []
-        meta_batch_size = 0
-        for support_images, support_labels, query_images, query_labels, positive_position in self.val_loader:
-            if meta_batch_size == 0:
-                meta_batch_size = support_images.size(0)
-            assert meta_batch_size == support_images.size(0)
+        # Select ten tasks randomly from the test set to evaluate_accuracy on
+        query_F1_list = []
+        finetune_img_count = 200  # 找100张图进行finetune
 
-            for task_idx in range(support_images.size(0)):  # 选择100个task
+        for _, _, _, query_images, _, query_labels, _ in self.val_loader:
+            for task_idx in range(query_images.size(0)):  # 选择100个task
                 # Make a test net with same parameters as our current net
                 test_net.copy_weights(self.network)
                 test_net.cuda()
                 test_net.train()
+                current_fine_tune_idx = 0
+                for m in test_net.modules():  # FIXME
+                    if isinstance(m, torch.nn.BatchNorm2d):
+                        m.eval()
                 test_opt = SGD(test_net.parameters(), lr=self.inner_step_size)
-                for i in range(self.num_inner_updates):  # 先fine_tune
-                    finetune_img, finetune_target = support_images[task_idx].cuda(), support_labels[task_idx].cuda()
-                    loss, _  = forward_pass(test_net, finetune_img, finetune_target)
-                    # print(loss.item())
-                    test_opt.zero_grad()
-                    loss.backward()
-                    test_opt.step()
-                # print("---------")
+                for _, _, _, task_test_img, _, test_adv_labels, _ in self.train_loader:
+                    task_test_img = task_test_img.cuda()
+                    test_adv_labels = test_adv_labels.cuda()
+                    for inner_idx in range(task_test_img.size(0)):
+                        finetune_img = task_test_img[inner_idx]
+                        finetune_target = test_adv_labels[inner_idx]
+                        # finetune_target = (finetune_target == task_positive_label).astype(np.int32)
+                        current_fine_tune_idx += finetune_target.size(0)
+                        for i in range(self.num_inner_updates):  # 先fine_tune
+                            loss, _ = forward_pass(test_net, finetune_img, finetune_target)
+                            # print(loss.item())
+                            test_opt.zero_grad()
+                            loss.backward()
+                            test_opt.step()
+                        if current_fine_tune_idx > finetune_img_count:
+                            break
+                    if current_fine_tune_idx > finetune_img_count:
+                        break  # 一直break到外层
+
                 test_net.eval()
                 # Evaluate the trained model on train and val examples
-                support_accuracy, support_F1 = evaluate(test_net, support_images[task_idx], support_labels[task_idx], positive_position[task_idx])
-                query_accuracy, query_F1 = evaluate(test_net, query_images[task_idx], query_labels[task_idx], positive_position[task_idx])
-                support_F1_list.append(support_F1)
+                query_accuracy, query_F1 = evaluate_two_way(test_net, query_images[task_idx], query_labels[task_idx])
                 query_F1_list.append(query_F1)
 
-        support_F1 = np.mean(support_F1_list)
         query_F1 = np.mean(query_F1_list)
-        result_json = {"support_F1": support_F1,
-                       "query_F1": query_F1,
+        result_json = {"query_F1": query_F1,
                        "num_updates": self.num_inner_updates}
-        if iter >= 0:
-            query_F1_tensor = torch.Tensor(1)
-            query_F1_tensor.fill_(query_F1)
-            self.tensorboard.record_val_query_F1(query_F1_tensor, iter)
-        print('Validation Set iteration:{} Support F1: {} Query F1: {}'.format(iter, support_F1, query_F1))
+        print('Validation Set Query F1: {}'.format( query_F1))
         del test_net
         return result_json
 
 
-
-    def test_task_accuracy(self, iter=0, use_positive_position=True):
+    def test_task_F1(self, iter=0, limit=100):
         test_net = copy.deepcopy(self.network)
-        # Select ten tasks randomly from the test set to evaluate on
+        # Select ten tasks randomly from the test set to evaluate_accuracy on
         support_F1_list, query_F1_list = [], []
-        meta_batch_size = 0
-        for support_images, support_labels, query_images, query_labels, positive_position in self.val_loader:
-            if meta_batch_size == 0:
-                meta_batch_size = support_images.size(0)
-            assert meta_batch_size == support_images.size(0)
-
+        all_c = 0
+        for support_images, _, support_labels, query_images, _, query_labels, positive_position in self.val_loader:
             for task_idx in range(support_images.size(0)):  # 选择100个task
                 # Make a test net with same parameters as our current net
                 test_net.copy_weights(self.network)
@@ -189,8 +159,8 @@ class MetaLearner(object):
                 # for m in test_net.modules():
                 #     if isinstance(m, torch.nn.BatchNorm2d):
                 #         m.eval()
-                for i in range(self.num_inner_updates):  # 先fine_tune
-                    finetune_img, finetune_target = support_images[task_idx].cuda(), support_labels[task_idx].cuda()
+                finetune_img, finetune_target = support_images[task_idx].cuda(), support_labels[task_idx].cuda()
+                for i in range(self.test_finetune_updates):  # 先fine_tune
                     loss, _  = forward_pass(test_net, finetune_img, finetune_target)
                     # print(loss.item())
                     test_opt.zero_grad()
@@ -199,11 +169,13 @@ class MetaLearner(object):
                 # print("---------")
                 test_net.eval()
                 # Evaluate the trained model on train and val examples
-                support_accuracy, support_F1 = evaluate(test_net, support_images[task_idx], support_labels[task_idx], positive_position[task_idx].item(),use_positive_position=use_positive_position)
-                query_accuracy, query_F1 = evaluate(test_net, query_images[task_idx], query_labels[task_idx], positive_position[task_idx].item(),use_positive_position=use_positive_position)
+                support_accuracy, support_F1 = evaluate_two_way(test_net, finetune_img, finetune_target)
+                query_accuracy, query_F1 = evaluate_two_way(test_net, query_images[task_idx], query_labels[task_idx])
                 support_F1_list.append(support_F1)
                 query_F1_list.append(query_F1)
-
+                all_c += 1
+                if limit >0 and all_c > limit:
+                    break
         support_F1 = np.mean(support_F1_list)
         query_F1 = np.mean(query_F1_list)
         result_json = {"support_F1": support_F1,
@@ -218,20 +190,17 @@ class MetaLearner(object):
         return result_json
 
 
-    def train(self, model_path, resume_epoch=0):
+    def train(self, model_path, resume_epoch=0, need_val=False):
         # mtr_loss, mtr_acc, mval_loss, mval_acc = [], [], [], []
         PRINT_INTERVAL = 100
-
 
         for epoch in range(resume_epoch, self.epoch):
             # Evaluate on test tasks
             # Collect a meta batch update
             # Save a model snapshot every now and then
 
-            for i, (support_images, support_labels, query_images, query_labels, _) in enumerate(self.train_loader):
+            for i, (support_images, _, support_labels, query_images, _, query_labels, _) in enumerate(self.train_loader):
                 itr = epoch * len(self.train_loader) + i
-                # if itr % PRINT_INTERVAL == 0 and itr > 0:
-                #     result_json = self.test_task_accuracy(itr)
                 self.adjust_learning_rate(itr, self.meta_step_size, self.lr_decay_itr)
                 grads = []
                 support_images, support_labels, query_images, query_labels = support_images.cuda(), support_labels.cuda(), query_images.cuda(), query_labels.cuda()
@@ -246,7 +215,8 @@ class MetaLearner(object):
                 # print('Meta update', itr)
                 self.meta_update(grads, query_images, query_labels)
                 grads.clear()
-
+                if itr % 100 == 0 and need_val:
+                    self.test_task_F1(itr, limit=200)
             torch.save({
                 'epoch': epoch + 1,
                 'state_dict': self.network.state_dict(),
@@ -262,9 +232,3 @@ class MetaLearner(object):
                 self.fast_net.step_size = self.fast_net.step_size / 10
                 for param_group in self.opt.param_groups:
                     param_group['lr'] = meta_lr
-
-
-
-
-
-

@@ -1,6 +1,6 @@
 from collections import OrderedDict
 
-from pytorch_MAML.score import *
+from meta_adv_detector.score import *
 from torch import nn
 import torch
 import copy
@@ -57,8 +57,8 @@ class InnerLoop(nn.Module):
                 grads = torch.autograd.grad(loss, fast_weights.values())
             fast_weights = OrderedDict((name, param - self.step_size*grad) for ((name, param), grad) in zip(fast_weights.items(), grads))
         ##### Test net after training, should be better than random ####
-        # tr_post_loss, tr_post_acc, tr_post_two_acc = evaluate(self, in_support, target_support,positive_label, weights=fast_weights)
-        # val_post_loss, val_post_acc, val_post_two_acc = evaluate(self, in_query, target_query,positive_label, weights=fast_weights)
+        # tr_post_loss, tr_post_acc, tr_post_two_acc = evaluate_accuracy(self, in_support, target_support,positive_label, weights=fast_weights)
+        # val_post_loss, val_post_acc, val_post_two_acc = evaluate_accuracy(self, in_query, target_query,positive_label, weights=fast_weights)
         # Compute the meta gradient and return it
         loss, _ = self.forward_pass(in_query, target_query, fast_weights)   #
         loss = loss / self.meta_batch_size # normalize loss

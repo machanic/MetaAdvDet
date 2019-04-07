@@ -10,7 +10,6 @@ from neural_fingerprint.fingerprint import Fingerprints,Example,Stats
 from config import IMAGE_SIZE, IN_CHANNELS
 import copy
 from torch import optim
-
 class NeuralFingerprintDetector(object):
 
     def __init__(self, dataset, model, num_dx, num_class, eps, out_fp_dxdy_dir):
@@ -51,7 +50,8 @@ class NeuralFingerprintDetector(object):
             pickle.dump(self.fp_target, file_obj)
         print("dump to {} and {} over".format(self.dx_path, self.dy_path))
 
-    def train_one_image(self, model, x, y, optimizer, epoch=1):
+
+    def get_all_loss(self, model, x,y, epoch):
         x, y = x.cuda(), y.cuda()
 
         real_bs = y.size(0)
@@ -62,7 +62,7 @@ class NeuralFingerprintDetector(object):
             dx = torch.from_numpy(dx).float().cuda()
             x_net = torch.cat((x_net, x + dx))
         logits_net = model(x_net)
-        output_net = F.log_softmax(logits_net)
+        output_net = F.log_softmax(logits_net, dim=1)
         yhat = output_net[:real_bs]
         logits = logits_net[:real_bs]
         # 除以模长，归一化
@@ -88,6 +88,10 @@ class NeuralFingerprintDetector(object):
                 loss = loss_vanilla + (1.0 + 50.0 / self.num_dx) * loss_fingerprint_dy
             else:
                 loss = loss_vanilla
+        return loss, loss_vanilla, loss_fingerprint_y, loss_fingerprint_dy
+
+    def train_one_image(self, model, x, y, optimizer, epoch=1):
+        loss, loss_vanilla, loss_fingerprint_y, loss_fingerprint_dy = self.get_all_loss(model,x,y, epoch)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
@@ -99,7 +103,7 @@ class NeuralFingerprintDetector(object):
         for batch_idx, (x, y) in enumerate(data_loader):
             x,y = x.cuda(), y.cuda()
             loss, loss_vanilla, loss_fingerprint_y, loss_fingerprint_dy = self.train_one_image(self.model, x, y, optimizer, epoch)
-            if batch_idx % 1000 == 0:
+            if batch_idx % 100 == 0:
                 print(
                     'Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss vanilla: {:.3f} fp-y: {:.3f} fp-dy: {:.3f} Total Loss: {:.3f}'.format(
                         epoch, batch_idx * len(x), len(data_loader.dataset),
@@ -250,8 +254,14 @@ class NeuralFingerprintDetector(object):
 
             if ex.binary_y == 1:
                 stats.P.add(ex.id)
+                stats.ground_truth_list.append(1)
             else:
                 stats.N.add(ex.id)
+                stats.ground_truth_list.append(0)
+            if is_legal:
+                stats.predition_list.append(1)
+            else:
+                stats.predition_list.append(0)
             if is_legal and ex.binary_y == 1:
                 stats.TP.add(ex.id)
             if is_legal and ex.binary_y == 0:
@@ -309,7 +319,7 @@ class NeuralFingerprintDetector(object):
 
 
 
-    def eval_with_fingerprints_finetune(self, val_loader, ds_name, reject_thresholds, num_updates, lr):
+    def eval_with_fingerprints_finetune(self, val_loader, ds_name, reject_thresholds, num_updates, lr, threshold):
         test_net = copy.deepcopy(self.model)
         stats_per_tau = {thresh: Stats(tau=thresh, name=ds_name, ds_name=ds_name) for thresh in reject_thresholds}
         i = 0
@@ -322,7 +332,7 @@ class NeuralFingerprintDetector(object):
             support_images = support_images.cuda()
             query_images = query_images.cuda()
             for task_idx in range(support_images.size(0)):
-                print("evaluate task {}".format(task_idx))
+                print("evaluate_accuracy task {}".format(task_idx))
                 clean_support_index = np.where(support_binary_labels[task_idx] == 1)[0]
                 clean_imgs = support_images[task_idx][clean_support_index]
                 clean_labels = support_gt_labels[task_idx][clean_support_index]  # support label 需要传入干净图 的真正label，而不是0/1
@@ -367,8 +377,9 @@ class NeuralFingerprintDetector(object):
                     ids_correct = stats.ids_correct
                     F1 = stats.compute_counts(ids_correct=ids_correct)["F1"]
                     result[tau] = F1
-
+                # best_F1 = result[min(result.keys(), key=lambda k: abs(k-threshold))]
                 best_F1 = max(list(result.values()))
+                # best_tau = threshold
                 best_tau = max(list(result.items()), key=lambda e:e[1])[0]
                 all_F1_scores.append(best_F1)
                 all_tau.append(best_tau)

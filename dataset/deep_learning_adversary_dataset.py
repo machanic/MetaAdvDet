@@ -1,16 +1,14 @@
 import random
 from collections import defaultdict
 
-import scipy.io
 from torch.utils import data
-from PIL import Image
 import glob
 import re
 import numpy as np
 import os
 
+from dataset.protocol_enum import SPLIT_DATA_PROTOCOL
 
-from pytorch_MAML.meta_dataset import SPLIT_DATA_PROTOCOL
 
 class AdversaryDataset(data.Dataset):
     def __init__(self, root_path, train, protocol, META_ATTACKER_PART_I, META_ATTACKER_PART_II, balance):
@@ -44,15 +42,15 @@ class AdversaryDataset(data.Dataset):
             gt_label = data["gt_label"]
 
             if adv_name == "clean":
-                label = 1
+                adv_label = 1
                 adv_images = data["adv_images"]
                 self.cache[npz_path] = adv_images
                 indexes = np.arange(adv_images.shape[0])
             else:
-                label = 0
+                adv_label = 0
                 indexes = np.where(adv_pred != gt_label)[0]
             for index in indexes:
-                self.img_label_dict[label].append((npz_path, index, label))
+                self.img_label_dict[adv_label].append((npz_path, index, adv_label))
             print("{} done".format(npz_path))
         self.img_label_list.extend(self.img_label_dict[1])
         if balance:
