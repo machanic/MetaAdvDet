@@ -39,6 +39,7 @@ from image_rotate_detector.image_rotate import ImageTransformCV2
 
 from config import PY_ROOT
 import re
+from image_rotate_detector.evaluation.speed_evaluation import evaluate_speed
 
 # 整个程序分两步走:1. 先训练一个图像分类器，分类用原始的gt label; 2.再训练一个 detector，锁定图像分类器的weight
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
@@ -116,6 +117,8 @@ def main():
         evaluate_whitebox_attack(args)
     elif args.study_subject == "zero_shot":
         evaluate_zero_shot(args)
+    elif args.study_subject == "speed_test":
+        evaluate_speed(args)
 
 def evaluate_accuracy(net, in_, target_positive, weights=None):
     # in_ is one task's 5-way k-shot data, in_ is either support data or query data
@@ -193,6 +196,10 @@ def train_detector(gpu, arch, adv_data_arch, img_classifier_model_path,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
     cudnn.benchmark = True
+    if args.protocol == SPLIT_DATA_PROTOCOL.TRAIN_ALL_TEST_ALL:
+        args.balance = True
+    else:
+        args.balance = False
     train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[dataset] + "/adversarial_images/{}".format(adv_data_arch), True,
                                      args.protocol, config.META_ATTACKER_PART_I, config.META_ATTACKER_PART_II,balance=args.balance)
     train_loader = torch.utils.data.DataLoader(

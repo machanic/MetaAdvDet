@@ -7,7 +7,7 @@ import torch
 
 from config import PY_ROOT
 from dataset.protocol_enum import SPLIT_DATA_PROTOCOL
-from meta_adv_detector.maml import MetaLearner
+from meta_adv_detector.meta_adv_det import MetaLearner
 
 
 def meta_zero_shot_evaluate(args):

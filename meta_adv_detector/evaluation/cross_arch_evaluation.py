@@ -7,7 +7,7 @@ import torch
 import json
 from config import PY_ROOT
 from dataset.protocol_enum import SPLIT_DATA_PROTOCOL
-from meta_adv_detector.maml import MetaLearner
+from meta_adv_detector.meta_adv_det import MetaLearner
 
 def meta_cross_arch_evaluate(args):
     extract_pattern = re.compile(

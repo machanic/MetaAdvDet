@@ -1,8 +1,8 @@
 import sys
+sys.path.append("/home1/machen/adv_detection_meta_learning")
 
 from networks.conv3 import Conv3
 
-sys.path.append("/home1/machen/adv_detection_meta_learning")
 import os
 import copy
 from config import PY_ROOT, IN_CHANNELS, IMAGE_SIZE

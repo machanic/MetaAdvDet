@@ -1,7 +1,5 @@
 import os
 import sys
-
-
 sys.path.append("/home1/machen/adv_detection_meta_learning")
 from meta_adv_detector.evaluation import meta_ablation_study_evaluate, meta_cross_domain_evaluate, \
                                             meta_cross_arch_evaluate,meta_white_box_attack_evaluate,meta_zero_shot_evaluate
@@ -11,10 +9,13 @@ import argparse
 from config import PY_ROOT
 import random
 import numpy as np
-from meta_adv_detector.meta_adv_det import MetaLearner
+from meta_adv_detector.ablation_study.meta_adv_det_task_net import MetaLearnerTasknetOnly
 import torch
 from meta_adv_detector.evaluation.speed_evaluation import evaluate_speed
 
+# 1. 把每个task 拆开，拆成support和query: 不要query，只要support，去除外部更新。T网络同样把梯度（在support上计算得到的梯度传递给M网络)。
+# 2. 不要M网络，只要T网络，但是要support和query。但是只在T网络上更新。
+# 3. 只要T网络，只要support数据
 def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch Meta_SGD Training')
     # Training options
@@ -28,8 +29,7 @@ def parse_args():
     parser.add_argument('--num_support',type=int, default=1, help='number/shots of examples used for inner gradient update (K for K-shot learning) in one way.')
     parser.add_argument('--num_query', type=int, default=35,
                         help='number of examples of each class in query set in one way.')
-    parser.add_argument('--num_updates', type=int, default=12,
-                        help='number of inner gradient updates(on support set) during training.')
+    parser.add_argument('--num_updates', type=int, default=12, help='number of inner gradient updates(on support set) during training.')
     parser.add_argument('--tot_num_tasks', type=int, default=20000, help='the maximum number of tasks in total, which is repeatly processed in training.')
     parser.add_argument('--arch', type=str, default='conv3', choices=["resnet10", "resnet18", "densenet121", "conv3",  "vgg11", "vgg11_bn", "vgg13", "vgg13_bn", "vgg16", "vgg16_bn"],help='network name')  #10 层
     parser.add_argument('--test_num_updates', type=int, default=20, help='number of inner gradient updates during testing')
@@ -46,6 +46,9 @@ def parse_args():
     parser.add_argument("--cross_arch_source", type=str, help="the source arch to evaluate_accuracy")
     parser.add_argument("--cross_arch_target", type=str, help="the target arch to evaluate_accuracy")
     parser.add_argument("--evaluate", action="store_true")
+
+    parser.add_argument("--ony_support_data", action="store_true")
+    parser.add_argument("--task_net_only", action="store_true")
 
     ## Logging, saving, and testing options
     args = parser.parse_args()
@@ -75,7 +78,7 @@ def main():
         class_number = args.num_classes
         if args.no_random_way:
             class_number = 2
-        learner = MetaLearner(args.dataset, class_number, args.meta_batch_size, args.meta_lr, args.inner_lr, args.lr_decay_itr,
+        learner = MetaLearnerTasknetOnly(args.dataset, class_number, args.meta_batch_size, args.meta_lr, args.inner_lr, args.lr_decay_itr,
                               args.epoch, args.num_updates, args.load_task_mode,
                               args.split_protocol, args.arch, args.tot_num_tasks, args.num_support, args.num_query,
                               args.no_random_way,

@@ -35,6 +35,7 @@ from evaluation_toolkit.evaluation import finetune_eval_task_accuracy
 from deep_learning_adv_detector.evaluation.zero_shot_evaluation import evaluate_zero_shot
 from deep_learning_adv_detector.evaluation.white_box_evaluation import evaluate_whitebox
 import glob
+from deep_learning_adv_detector.evaluation.speed_evaluation import evaluate_speed
 
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
@@ -65,7 +66,7 @@ parser.add_argument('-p', '--print-freq', default=100, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
-parser.add_argument('-e', '--evaluate_accuracy', dest='evaluate_accuracy', action='store_true',
+parser.add_argument('-e', '--evaluate',  action='store_true',
                     help='evaluate_accuracy model on validation set')
 parser.add_argument('--pretrained', dest='pretrained', action='store_true',
                     help='use pre-trained model')
@@ -126,6 +127,8 @@ def main():
                                          args.cross_arch_target)
         elif args.study_subject == "zero_shot":
             result =evaluate_zero_shot(model_file_list, args.lr, args.protocol, args)
+        elif args.study_subject == "speed_test":
+            result = evaluate_speed(model_file_list, args.num_updates, args.lr, args.protocol)
         elif args.study_subject == "white_box":
             result =defaultdict(dict)
             attacks = ["FGSM", "CW_L2"]
@@ -148,6 +151,8 @@ def main():
             file_name = '{}/train_pytorch_model/white_box_model/white_box_UPDATEBN_DNN_{}_using_{}_protocol.json'.format(PY_ROOT,
                                                                                                          args.dataset,
                                                                                                          args.protocol)
+        elif args.study_subject == "speed_test":
+            file_name = '{}/train_pytorch_model/DL_DET/speed_test_of_DNN.json'.format(PY_ROOT)
         elif args.study_subject == "zero_shot":
             if args.cross_domain_source:
                 file_name = '{}/train_pytorch_model/DL_DET/evaluate_{}_{}--{}_using_{}_protocol.json'.format(PY_ROOT,
@@ -280,7 +285,7 @@ def train(train_loader,val_loader, model, criterion, optimizer, epoch, tensorboa
                 loss=losses, top1=top1, ))
 
             # iter = epoch * len(train_loader) + i
-            # evaluate_result = finetune_eval_task_accuracy(model, val_loader, 0, 0, 1000)
+            # evaluate_result = speed_test(model, val_loader, 0, 0, 1000)
             # query_F1_tensor = torch.Tensor(1)
             # query_F1_tensor.fill_(evaluate_result["query_F1"])
             # tensorboard.record_val_query_F1(query_F1_tensor, iter)

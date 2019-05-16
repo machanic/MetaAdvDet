@@ -5,7 +5,7 @@ import json
 import torch
 
 from config import IMAGE_DATA_ROOT, PY_ROOT
-from meta_adv_detector.white_box_maml import MetaLearner as MetaLearnerWhiteBox
+from meta_adv_detector.white_box_meta_adv_det import MetaLearner as MetaLearnerWhiteBox
 
 def meta_white_box_attack_evaluate(arch, adv_arch, args):
     report_result = defaultdict(dict)

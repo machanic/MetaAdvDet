@@ -11,9 +11,9 @@ from torch.optim import SGD
 
 from config import PY_ROOT, LEAVE_ONE_OUT_DATA_ROOT, IMAGE_DATA_ROOT
 from dataset.protocol_enum import SPLIT_DATA_PROTOCOL
-from meta_adv_detector.maml import MetaLearner
+from meta_adv_detector.meta_adv_det import MetaLearner
 from meta_adv_detector.score import forward_pass, evaluate_two_way
-from meta_adv_detector.white_box_maml import MetaLearner as MetaLearnerWhiteBox
+from meta_adv_detector.white_box_meta_adv_det import MetaLearner as MetaLearnerWhiteBox
 
 
 def accuracy(output, target, topk=(1,)):

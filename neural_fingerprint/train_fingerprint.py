@@ -9,7 +9,7 @@ from dataset.meta_task_dataset import MetaTaskDataset
 from collections import defaultdict
 
 import config
-
+from neural_fingerprint.evaluation.speed_evaluation import evaluate_speed
 
 import argparse
 
@@ -148,6 +148,11 @@ def main():
                 'optimizer': optimizer.state_dict(),
             }, model_path)
     else:  # 测试模式
+
+        if args.study_subject == "speed_test":
+            evaluate_speed(args)
+            return
+
         extract_pattern = re.compile(".*NF_Det@(.*?)@(.*?)@epoch_(\d+)@lr_(.*?)@eps_(.*?)@num_dx_(\d+)@num_class_(\d+).pth.tar")
         results = defaultdict(dict)
         for model_path in glob.glob("{}/train_pytorch_model/NF_Det/NF_Det@*".format(PY_ROOT)):
@@ -196,6 +201,7 @@ def main():
                                                                             reject_thresholds, args.num_updates, args.lr, threhold_dict[report_shot])
                     results[ds_name][report_shot] = {"F1":F1,  "best_tau":tau, "eps":eps, "num_dx":num_dx, "num_updates":args.num_updates}
                     print("shot {} done".format(shot))
+
             elif args.study_subject == "cross_domain":
                 source_dataset, target_dataset = args.cross_domain_source, args.cross_domain_target
                 if ds_name!= source_dataset:
@@ -236,10 +242,10 @@ def main():
                                                   protocol=args.protocol, no_random_way=True, adv_arch=target_arch,
                                                   rotate=False)
                     adv_val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=100, shuffle=False, **kwargs)
-                    F1, tau = detector.eval_with_fingerprints_finetune(adv_val_loader, args.ds_name,
+                    F1, tau = detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name,
                                                                        reject_thresholds, args.num_updates, args.lr,
                                                                        None)
-                    results["target_arch_{}".format(target_arch)][report_shot] = {"F1": F1, "best_tau": tau,
+                    results["{}_target_arch_{}".format(ds_name,target_arch)][report_shot] = {"F1": F1, "best_tau": tau,
                                                                                              "eps": eps,
                                                                                              "num_dx": num_dx,
                                                                                              "num_updates": args.num_updates}
@@ -271,11 +277,12 @@ def main():
                     print("finetune {} done".format(shot))
 
 
+
         if not args.profile:
             if args.study_subject == "cross_domain":
                 filename = "{}/train_pytorch_model/NF_Det/cross_domain_{}--{}.json".format(PY_ROOT,args.cross_domain_source, args.cross_domain_target)
             elif args.study_subject == "cross_arch":
-                filename = "{}/train_pytorch_model/NF_Det/cross_arch_target_{}_{}.json".format(PY_ROOT, args.ds_name,
+                filename = "{}/train_pytorch_model/NF_Det/cross_arch_target_{}.json".format(PY_ROOT,
                                                                                            args.cross_arch_target)
             else:
                 filename ="{}/train_pytorch_model/NF_Det/{}@data_{}@protocol_{}@lr_{}@finetune_{}.json".format(PY_ROOT,args.study_subject, args.adv_arch, args.protocol,args.lr, args.num_updates)

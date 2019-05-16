@@ -70,7 +70,7 @@ def draw_shots_line_curve(x_list, y_list, save_fig_name):
     plt.xlim(0, 16)
     plt.ylim(50, 90)
     plt.gcf().subplots_adjust(bottom=0.15)
-    plt.xticks([0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15], fontsize=15)
+    plt.xticks([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15], fontsize=15)
     plt.yticks([50,55,60,65,70,75,80,85,90], fontsize=15)
     plt.xlabel("shots", fontsize=18)
     plt.ylabel("F1 score of query set(%)", fontsize=18)

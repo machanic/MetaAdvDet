@@ -1,3 +1,5 @@
+import time
+
 from torch import nn
 import numpy as np
 import pickle
@@ -391,3 +393,78 @@ class NeuralFingerprintDetector(object):
         del test_net
         print("final   F1: {}  tau:{}".format( F1, tau))
         return F1, tau
+
+
+
+    def test_speed(self, val_loader, ds_name, reject_thresholds, num_updates, lr):
+        test_net = copy.deepcopy(self.model)
+        stats_per_tau = {thresh: Stats(tau=thresh, name=ds_name, ds_name=ds_name) for thresh in reject_thresholds}
+        i = 0
+        all_times = []
+        # 注意这个val_loader要特别定制化
+        for support_images,support_gt_labels, support_binary_labels, query_images, query_gt_labels, query_binary_labels,_ in val_loader:
+            support_binary_labels = support_binary_labels.detach().cpu().numpy()
+            support_gt_labels = support_gt_labels.cuda()
+            support_images = support_images.cuda()
+            query_images = query_images.cuda()
+            for task_idx in range(support_images.size(0)):
+                print("evaluate_accuracy task {}".format(task_idx))
+                clean_support_index = np.where(support_binary_labels[task_idx] == 1)[0]
+                clean_imgs = support_images[task_idx][clean_support_index]
+                clean_labels = support_gt_labels[task_idx][clean_support_index]  # support label 需要传入干净图 的真正label，而不是0/1
+                test_net.copy_weights(self.model)
+
+                optimizer = optim.SGD(test_net.parameters(), lr=lr)
+                batch_size = clean_imgs.size(0)
+                clean_imgs = clean_imgs.view(batch_size, IN_CHANNELS[ds_name], IMAGE_SIZE[ds_name][0], IMAGE_SIZE[ds_name][1])
+                test_net.train()
+                before_time = time.time()
+                for m in test_net.modules():
+                    if isinstance(m, torch.nn.BatchNorm2d):
+                        m.eval()  # BN层会出问题，不要训练
+                for _ in range(num_updates):  # 先fine_tune
+                    self.train_one_image(test_net, clean_imgs, clean_labels, optimizer, 1)
+
+                test_net.eval()
+                x, y = query_images[task_idx], query_gt_labels[task_idx]  # 注意这个分类信息是img gt label
+                binary_y = query_binary_labels[task_idx]
+                y = y.detach().cpu().numpy()
+                binary_y = binary_y.detach().cpu().numpy()
+                batch_size = x.size(0)
+                x = x.view(batch_size, IN_CHANNELS[ds_name], IMAGE_SIZE[ds_name][0], IMAGE_SIZE[ds_name][1])
+
+                data_np = x.detach().cpu().numpy()
+                real_bs = data_np.shape[0]
+
+                for b in range(real_bs):
+                    ex = self.model_with_fingerprint(test_net, x[b:b + 1], self.fp)
+                    # Careful! Needs Dataloader with shuffle=False
+                    ex.id = i
+                    ex.y = y[b] # ground truth of real image : 1 , adversarial image 0
+                    ex.binary_y = binary_y[b]
+                    ex, stats_per_tau = self.detect_with_fingerprints(ex, stats_per_tau)
+                    i += 1
+
+                # results = defaultdict(lambda: None)
+                # stats_results = defaultdict(lambda: None)
+
+                result = {}
+                for tau, stats in stats_per_tau.items():
+                    stats.counts = stats.compute_counts()
+                    ids_correct = stats.ids_correct
+                    F1 = stats.compute_counts(ids_correct=ids_correct)["F1"]
+                    result[tau] = F1
+                # best_F1 = result[min(result.keys(), key=lambda k: abs(k-threshold))]
+                best_F1 = max(list(result.values()))
+                # best_tau = threshold
+                time_elapse = time.time() - before_time
+                best_tau = max(list(result.items()), key=lambda e:e[1])[0]
+
+                all_times.append(time_elapse)
+                stats_per_tau.clear()
+                for thresh in reject_thresholds:
+                    stats_per_tau[thresh] = Stats(tau=thresh, name=ds_name, ds_name=ds_name)
+        mean_time = np.mean(all_times)
+        var_time = np.var(all_times)
+        del test_net
+        return mean_time, var_time
