@@ -52,7 +52,7 @@ def evaluate_cross_arch(args):
                 num_update = old_num_update
             meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, shot, num_query,
                                                 dataset, is_train=False, load_mode=args.load_mode,
-                                                protocol=split_protocol, no_random_way=True, adv_arch=args.cross_arch_target, rotate=False)
+                                                protocol=split_protocol, no_random_way=True, adv_arch=args.cross_arch_target, stats_attack=False)
             data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
             img_classifier_network = Conv3(IN_CHANNELS[dataset], IMAGE_SIZE[dataset],
                                                    CLASS_NUM[dataset])

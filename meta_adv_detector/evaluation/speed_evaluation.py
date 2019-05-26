@@ -92,7 +92,7 @@ def evaluate_speed(args):
                               args.test_num_updates,
                               load_mode,
                               split_protocol, arch, args.tot_num_tasks, num_support, 15,  # 这个num_query统一用15
-                              True, "", train=False, adv_arch=args.adv_arch,rotate=rotate,need_val=True)
+                              True, "", train=False, adv_arch=args.adv_arch, need_val=True)
 
         learner.network.load_state_dict(checkpoint['state_dict'], strict=True)
         result_json = speed_test(learner.network, learner.val_loader, inner_lr, args.test_num_updates, update_BN=True)

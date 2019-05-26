@@ -102,7 +102,7 @@ def evaluate_speed(args):
                 num_updates = args.num_updates
             meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, shot, num_query,
                                                 dataset, is_train=False, load_mode=LOAD_TASK_MODE.LOAD,
-                                                protocol=split_protocol, no_random_way=True, adv_arch="conv3", rotate=False)  # FIXME adv arch还没做cross arch的代码
+                                                protocol=split_protocol, no_random_way=True, adv_arch="conv3")  # FIXME adv arch还没做cross arch的代码
             data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
             img_classifier_network = Conv3(IN_CHANNELS[dataset], IMAGE_SIZE[dataset],
                                                    CLASS_NUM[dataset])

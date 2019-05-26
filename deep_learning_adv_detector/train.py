@@ -19,7 +19,6 @@ import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
 import torch.utils.data
-from torch.utils.data import DataLoader
 import torch.utils.data.distributed
 import torchvision.models as models
 from config import IMAGE_SIZE, IMAGE_DATA_ROOT
@@ -27,11 +26,8 @@ import config
 
 import json
 from config import IN_CHANNELS, PY_ROOT
-from dataset.meta_task_dataset import MetaTaskDataset
 from dataset.protocol_enum import SPLIT_DATA_PROTOCOL, LOAD_TASK_MODE
 
-import re
-from evaluation_toolkit.evaluation import finetune_eval_task_accuracy
 from deep_learning_adv_detector.evaluation.zero_shot_evaluation import evaluate_zero_shot
 from deep_learning_adv_detector.evaluation.white_box_evaluation import evaluate_whitebox
 import glob

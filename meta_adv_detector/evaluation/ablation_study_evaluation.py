@@ -53,8 +53,6 @@ def meta_ablation_study_evaluate(args):
             extract_key = "shots_{}_fixed_way_{}".format(num_support, fixe_way)
         elif args.study_subject == "query_size_ablation_study":
             extract_key = num_query
-        elif args.study_subject == "rotate_vs_orginal":
-            extract_key = "rotate_{}_shots".format(num_support) if rotate else "no_rotate_{}_shots".format(num_support)
         elif args.study_subject == "vs_deep_MAX":
             extract_key = num_support
         elif args.study_subject == "zero_shot":
@@ -89,7 +87,7 @@ def meta_ablation_study_evaluate(args):
                                   args.test_num_updates,
                                   load_mode,
                                   split_protocol, arch, args.tot_num_tasks, num_support, 15,  # 这个num_query统一用15
-                                  True, param_prefix, train=False, adv_arch=args.adv_arch,rotate=rotate,need_val=True)
+                                  True, param_prefix, train=False, adv_arch=args.adv_arch, need_val=True)
             learner.network.load_state_dict(checkpoint['state_dict'], strict=True)
             result_json = finetune_eval_task_accuracy(learner.network, learner.val_loader, inner_lr, args.test_num_updates, update_BN=True)
             report_result[dataset][extract_key] = result_json

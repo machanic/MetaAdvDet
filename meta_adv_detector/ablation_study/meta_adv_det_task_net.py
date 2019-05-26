@@ -52,7 +52,7 @@ class MetaLearnerTasknetOnly(object):
             trn_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
                                           dataset, is_train=True, load_mode=load_task_mode,
                                           protocol=protocol,
-                                          no_random_way=no_random_way, adv_arch=adv_arch,rotate=rotate)
+                                          no_random_way=no_random_way, adv_arch=adv_arch)
             self.train_loader = DataLoader(trn_dataset, batch_size=meta_batch_size, shuffle=True, num_workers=0, pin_memory=True)
             self.tensorboard = TensorBoardWriter("{0}/MAML_task_net_tensorboard".format(PY_ROOT),
                                                  tensorboard_data_prefix)
@@ -61,7 +61,7 @@ class MetaLearnerTasknetOnly(object):
             val_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, 15,
                                           dataset, is_train=False, load_mode=load_task_mode,
                                           protocol=protocol,
-                                          no_random_way=True, adv_arch=adv_arch,rotate=rotate)
+                                          no_random_way=True, adv_arch=adv_arch)
             self.val_loader = DataLoader(val_dataset, batch_size=100, shuffle=False, num_workers=0, pin_memory=True) # 固定100个task，分别测每个task的准确率
 
         self.opt = Adam(self.network.parameters(), lr=meta_step_size)

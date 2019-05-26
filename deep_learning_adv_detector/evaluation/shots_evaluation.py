@@ -43,8 +43,8 @@ def evaluate_shots(model_path_list, num_update,lr, protocol):
         print("=> loaded checkpoint '{}' (epoch {})"
               .format(model_path, checkpoint['epoch']))
         old_num_update = num_update
-        for shot in range(16):
-        # for shot in [0,1,5]:
+        # for shot in range(16):
+        for shot in [1,5]:
             if shot == 0:
                 shot = 1
                 num_update = 0

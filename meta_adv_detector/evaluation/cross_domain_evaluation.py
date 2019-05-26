@@ -3,10 +3,12 @@ from collections import defaultdict
 
 import glob
 
+import json
 import torch
 
 from config import PY_ROOT
 from dataset.protocol_enum import SPLIT_DATA_PROTOCOL
+from evaluation_toolkit.evaluation import finetune_eval_task_accuracy
 from meta_adv_detector.meta_adv_det import MetaLearner
 
 
@@ -39,9 +41,6 @@ def meta_cross_domain_evaluate(args):
         checkpoint = torch.load(model_path, map_location=lambda storage, location: storage)
 
         for shot in [1,5]:
-            orig_shot = shot
-            if shot == 0:
-                shot = 5
             learner = MetaLearner(args.cross_domain_target, num_classes, meta_batch_size, meta_lr, inner_lr, args.lr_decay_itr,
                                   epoch,
                                   args.test_num_updates,
@@ -53,7 +52,7 @@ def meta_cross_domain_evaluate(args):
             #     shot = orig_shot
             #     result_json = learner.test_zero_shot_with_finetune_trainset()
             # else:
-            result_json = learner.test_task_F1(-1)
+            result_json = finetune_eval_task_accuracy(learner.network,learner.val_loader, learner.inner_step_size, learner.test_finetune_updates,update_BN=True)
             report_result[args.cross_domain_source+"--"+args.cross_domain_target][shot] = result_json
     with open("{}/train_pytorch_model/{}/{}--{}@finetune_{}_result.json".format(PY_ROOT,args.study_subject,args.cross_domain_source,
                                             args.cross_domain_target, args.test_num_updates), "w") as file_obj:

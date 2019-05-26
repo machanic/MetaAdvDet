@@ -1,6 +1,9 @@
 import sys
-sys.path.append("/home1/machen/adv_detection_meta_learning")
 
+
+
+sys.path.append("/home1/machen/adv_detection_meta_learning")
+from evaluation_toolkit.evaluation import finetune_eval_task_accuracy
 from networks.conv3 import Conv3
 
 import os
@@ -26,7 +29,7 @@ class MetaLearner(object):
                  epoch,
                  num_inner_updates, load_task_mode, protocol, arch,
                  tot_num_tasks, num_support, num_query, no_random_way,
-                 tensorboard_data_prefix, train=True, adv_arch="conv3",rotate=False,need_val=False):
+                 tensorboard_data_prefix, train=True, adv_arch="conv3", need_val=False):
         super(self.__class__, self).__init__()
         self.dataset = dataset
         self.num_classes = num_classes
@@ -51,7 +54,8 @@ class MetaLearner(object):
             trn_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, num_query,
                                           dataset, is_train=True, load_mode=load_task_mode,
                                           protocol=protocol,
-                                          no_random_way=no_random_way, adv_arch=adv_arch,rotate=rotate)
+                                          no_random_way=no_random_way, adv_arch=adv_arch)
+            # task number per mini-batch is controlled by DataLoader
             self.train_loader = DataLoader(trn_dataset, batch_size=meta_batch_size, shuffle=True, num_workers=0, pin_memory=True)
             self.tensorboard = TensorBoardWriter("{0}/pytorch_MAML_tensorboard".format(PY_ROOT),
                                                  tensorboard_data_prefix)
@@ -60,7 +64,7 @@ class MetaLearner(object):
             val_dataset = MetaTaskDataset(tot_num_tasks, num_classes, num_support, 15,
                                           dataset, is_train=False, load_mode=load_task_mode,
                                           protocol=protocol,
-                                          no_random_way=True, adv_arch=adv_arch,rotate=rotate)
+                                          no_random_way=True, adv_arch=adv_arch)
             self.val_loader = DataLoader(val_dataset, batch_size=100, shuffle=False, num_workers=0, pin_memory=True) # 固定100个task，分别测每个task的准确率
         self.fast_net = InnerLoop(self.network, self.num_inner_updates,
                                   self.inner_step_size, self.meta_batch_size)  # 并行执行每个task
@@ -144,52 +148,6 @@ class MetaLearner(object):
         return result_json
 
 
-    def test_task_F1(self, iter=0, limit=100):
-        test_net = copy.deepcopy(self.network)
-        # Select ten tasks randomly from the test set to evaluate_accuracy on
-        support_F1_list, query_F1_list = [], []
-        all_c = 0
-        for support_images, _, support_labels, query_images, _, query_labels, positive_position in self.val_loader:
-            for task_idx in range(support_images.size(0)):  # 选择100个task
-                # Make a test net with same parameters as our current net
-                test_net.copy_weights(self.network)
-                test_net.cuda()
-                test_net.train()
-                test_opt = SGD(test_net.parameters(), lr=self.inner_step_size)
-                # for m in test_net.modules():
-                #     if isinstance(m, torch.nn.BatchNorm2d):
-                #         m.eval()
-                finetune_img, finetune_target = support_images[task_idx].cuda(), support_labels[task_idx].cuda()
-                for i in range(self.test_finetune_updates):  # 先fine_tune
-                    loss, _  = forward_pass(test_net, finetune_img, finetune_target)
-                    # print(loss.item())
-                    test_opt.zero_grad()
-                    loss.backward()
-                    test_opt.step()
-                # print("---------")
-                test_net.eval()
-                # Evaluate the trained model on train and val examples
-                support_accuracy, support_F1 = evaluate_two_way(test_net, finetune_img, finetune_target)
-                query_accuracy, query_F1 = evaluate_two_way(test_net, query_images[task_idx], query_labels[task_idx])
-                support_F1_list.append(support_F1)
-                query_F1_list.append(query_F1)
-                all_c += 1
-                if limit >0 and all_c > limit:
-                    break
-        support_F1 = np.mean(support_F1_list)
-        query_F1 = np.mean(query_F1_list)
-        result_json = {"support_F1": support_F1,
-                       "query_F1": query_F1,
-                       "num_updates": self.num_inner_updates}
-        if iter >= 0:
-            query_F1_tensor = torch.Tensor(1)
-            query_F1_tensor.fill_(query_F1)
-            self.tensorboard.record_val_query_F1(query_F1_tensor, iter)
-        print('Validation Set iteration:{} Support F1: {} Query F1: {}'.format(iter, support_F1, query_F1))
-        del test_net
-        return result_json
-
-
     def train(self, model_path, resume_epoch=0, need_val=False):
         # mtr_loss, mtr_acc, mval_loss, mval_acc = [], [], [], []
         PRINT_INTERVAL = 100
@@ -216,7 +174,11 @@ class MetaLearner(object):
                 self.meta_update(grads, query_images, query_labels)
                 grads.clear()
                 if itr % 100 == 0 and need_val:
-                    self.test_task_F1(itr, limit=200)
+                    result_json = finetune_eval_task_accuracy(self.network, self.val_loader, self.inner_step_size,
+                                                self.test_finetune_updates, update_BN=True)
+                    query_F1_tensor = torch.Tensor(1)
+                    query_F1_tensor.fill_(result_json["query_F1"])
+                    self.tensorboard.record_val_query_F1(query_F1_tensor, itr)
             torch.save({
                 'epoch': epoch + 1,
                 'state_dict': self.network.state_dict(),

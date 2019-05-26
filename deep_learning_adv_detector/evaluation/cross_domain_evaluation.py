@@ -103,7 +103,7 @@ def evaluate_cross_domain(model_path_list, num_update, lr, protocol, src_dataset
                                                 load_mode=LOAD_TASK_MODE.LOAD,
                                                 protocol=protocol, no_random_way=True, adv_arch=adv_arch)
             data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
-            evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, num_update)
+            evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, num_update, update_BN=True)
             if num_update == 0:
                 shot = 0
             result["{}@{}-->{}".format(src_dataset,balance, target_dataset)][shot] = evaluate_result

@@ -179,7 +179,7 @@ def main():
                 all_shots = [0,1,5]
                 query_count = 15
                 old_updates = args.num_updates
-                threhold_dict = {0:0.885896, 1:1.23128099999,5:1.33487699}
+                # threhold_dict = {0:0.885896, 1:1.23128099999,5:1.33487699}
                 for shot in all_shots:
                     report_shot = shot
                     if shot == 0:
@@ -190,16 +190,17 @@ def main():
                     num_way = 2
                     num_query = 15
                     val_dataset = MetaTaskDataset(20000, num_way, shot, num_query,ds_name,is_train=False,load_mode=args.load_task_mode,
-                                                  protocol=args.protocol,no_random_way=True, adv_arch=args.adv_arch,rotate=False)
+                                                  protocol=args.protocol,no_random_way=True, adv_arch=args.adv_arch)
                     adv_val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=100, shuffle=False, **kwargs)
                     # if args.profile:
                     #     cProfile.runctx("detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name, reject_thresholds, args.num_updates, args.lr)", globals(), locals(), "Profile.prof")
                     #     s = pstats.Stats("Profile.prof")
                     #     s.strip_dirs().sort_stats("time").print_stats()
                     # else:
-                    F1, tau = detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name,
-                                                                            reject_thresholds, args.num_updates, args.lr, threhold_dict[report_shot])
-                    results[ds_name][report_shot] = {"F1":F1,  "best_tau":tau, "eps":eps, "num_dx":num_dx, "num_updates":args.num_updates}
+                    F1, tau, attacker_stats = detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name,
+                                                                            reject_thresholds, args.num_updates, args.lr)
+                    results[ds_name][report_shot] = {"F1":F1,  "best_tau":tau, "eps":eps, "num_dx":num_dx,
+                                                     "num_updates":args.num_updates, "attack_stats":attacker_stats}
                     print("shot {} done".format(shot))
 
             elif args.study_subject == "cross_domain":
@@ -207,7 +208,7 @@ def main():
                 if ds_name!= source_dataset:
                     continue
                 old_num_update = args.num_updates
-                threhold_dict = {0: 0.885896, 1: 1.23128099999, 5: 1.33487699}
+                # threhold_dict = {0: 0.885896, 1: 1.23128099999, 5: 1.33487699}
                 for shot in [0, 1, 5]:
                     report_shot = shot
                     if shot == 0:
@@ -219,12 +220,13 @@ def main():
                     num_query = 15
                     val_dataset = MetaTaskDataset(20000, num_way, shot, num_query, target_dataset, is_train=False,
                                                   load_mode=args.load_task_mode,
-                                                  protocol=args.protocol, no_random_way=True, adv_arch=args.adv_arch,
-                                                  rotate=False)
+                                                  protocol=args.protocol, no_random_way=True, adv_arch=args.adv_arch)
                     adv_val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=100, shuffle=False, **kwargs)
-                    F1, tau = detector.eval_with_fingerprints_finetune(adv_val_loader, target_dataset,
-                                                                       reject_thresholds, args.num_updates, args.lr, threhold_dict[shot])
-                    results["{}--{}".format(source_dataset, target_dataset)][report_shot] = {"F1":F1,  "best_tau":tau, "eps":eps, "num_dx":num_dx, "num_updates":args.num_updates}
+                    F1, tau, attacker_stats = detector.eval_with_fingerprints_finetune(adv_val_loader, target_dataset,
+                                                                       reject_thresholds, args.num_updates, args.lr)
+                    results["{}--{}".format(source_dataset, target_dataset)][report_shot] = {"F1":F1,  "best_tau":tau,
+                                                                                             "eps":eps, "num_dx":num_dx,
+                                                                            "num_updates":args.num_updates, "attack_stats":attacker_stats}
             elif args.study_subject == "cross_arch":
                 target_arch = args.cross_arch_target
                 old_num_update = args.num_updates
@@ -239,16 +241,15 @@ def main():
                     num_query = 15
                     val_dataset = MetaTaskDataset(20000, num_way, shot, num_query, ds_name, is_train=False,
                                                   load_mode=args.load_task_mode,
-                                                  protocol=args.protocol, no_random_way=True, adv_arch=target_arch,
-                                                  rotate=False)
+                                                  protocol=args.protocol, no_random_way=True, adv_arch=target_arch)
                     adv_val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=100, shuffle=False, **kwargs)
-                    F1, tau = detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name,
-                                                                       reject_thresholds, args.num_updates, args.lr,
-                                                                       None)
+                    F1, tau, attacker_stats = detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name,
+                                                                       reject_thresholds, args.num_updates, args.lr)
                     results["{}_target_arch_{}".format(ds_name,target_arch)][report_shot] = {"F1": F1, "best_tau": tau,
                                                                                              "eps": eps,
                                                                                              "num_dx": num_dx,
-                                                                                             "num_updates": args.num_updates}
+                                                                                             "num_updates": args.num_updates,
+                                                                                             "attack_stats":attacker_stats}
 
             elif args.study_subject == "finetune_eval":
                 shot = 1
@@ -256,13 +257,12 @@ def main():
                 old_updates = args.num_updates
                 num_way = 2
                 num_query = 15
-                threhold_dict = {0: 0.885896, 1: 1.23128099999, 5: 1.33487699}
+                # threhold_dict = {0: 0.885896, 1: 1.23128099999, 5: 1.33487699}
                 if ds_name != args.ds_name:
                     continue
                 val_dataset = MetaTaskDataset(20000, num_way, shot, num_query, ds_name, is_train=False,
                                               load_mode=args.load_task_mode,
-                                              protocol=args.protocol, no_random_way=True, adv_arch=args.adv_arch,
-                                              rotate=False)
+                                              protocol=args.protocol, no_random_way=True, adv_arch=args.adv_arch)
                 adv_val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=100, shuffle=False, **kwargs)
                 args.num_updates = 50
                 for num_update in range(0,51):
@@ -271,9 +271,10 @@ def main():
                     #     s = pstats.Stats("Profile.prof")
                     #     s.strip_dirs().sort_stats("time").print_stats()
                     # else:
-                    F1, tau = detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name,
-                                                                            reject_thresholds, num_update, args.lr, threhold_dict[shot])
-                    results[ds_name][num_update] = {"F1":F1,  "best_tau":tau, "eps":eps, "num_dx":num_dx, "num_updates":num_update}
+                    F1, tau, attacker_stats = detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name,
+                                                                            reject_thresholds, num_update, args.lr)
+                    results[ds_name][num_update] = {"F1":F1,  "best_tau":tau, "eps":eps, "num_dx":num_dx,
+                                                    "num_updates":num_update, "attack_stats": attacker_stats}
                     print("finetune {} done".format(shot))
 
 

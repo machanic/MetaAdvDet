@@ -45,7 +45,7 @@ def evaluate_finetune(args):
         num_query = 15
         meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, args.shot, num_query,
                                             dataset, is_train=False, load_mode=args.load_mode,
-                                            protocol=split_protocol, no_random_way=True, adv_arch="conv3", rotate=False)  # FIXME adv arch还没做cross arch的代码
+                                            protocol=split_protocol, no_random_way=True, adv_arch="conv3")  # FIXME adv arch还没做cross arch的代码
         data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
 
 

@@ -25,7 +25,6 @@ class Detector(MetaNetwork):
                                                 nn.Linear(128, 32),
                                                 nn.ReLU(),
                                                 nn.Linear(32, num_classes))
-        self.conv_fc_module_to_name = self.construct_weights()  # 必须写
 
     def feature_forward(self, x, random_rotate=False):
         x = x.permute(0, 2, 3, 1)  # N, C, H ,W -> N, H, W, C

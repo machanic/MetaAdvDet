@@ -9,7 +9,7 @@ import os
 from collections import defaultdict
 
 from neural_fingerprint.fingerprint import Fingerprints,Example,Stats
-from config import IMAGE_SIZE, IN_CHANNELS
+from config import IMAGE_SIZE, IN_CHANNELS, META_ATTACKER_INDEX
 import copy
 from torch import optim
 class NeuralFingerprintDetector(object):
@@ -321,14 +321,20 @@ class NeuralFingerprintDetector(object):
 
 
 
-    def eval_with_fingerprints_finetune(self, val_loader, ds_name, reject_thresholds, num_updates, lr, threshold):
+    def eval_with_fingerprints_finetune(self, val_loader, ds_name, reject_thresholds, num_updates, lr):
         test_net = copy.deepcopy(self.model)
         stats_per_tau = {thresh: Stats(tau=thresh, name=ds_name, ds_name=ds_name) for thresh in reject_thresholds}
         i = 0
         all_F1_scores = []
         all_tau = []
         # 注意这个val_loader要特别定制化
-        for support_images,support_gt_labels, support_binary_labels, query_images, query_gt_labels, query_binary_labels,_ in val_loader:
+        each_attack_stats = val_loader.dataset.fetch_attack_name
+        attacker_stats = defaultdict(list)
+        for pack in val_loader:
+            if each_attack_stats:
+                support_images, support_gt_labels, support_binary_labels, query_images, query_gt_labels, query_binary_labels, adversary_indexes, _ = pack
+            else:
+                support_images, support_gt_labels, support_binary_labels, query_images, query_gt_labels, query_binary_labels, _ = pack
             support_binary_labels = support_binary_labels.detach().cpu().numpy()
             support_gt_labels = support_gt_labels.cuda()
             support_images = support_images.cuda()
@@ -383,6 +389,10 @@ class NeuralFingerprintDetector(object):
                 best_F1 = max(list(result.values()))
                 # best_tau = threshold
                 best_tau = max(list(result.items()), key=lambda e:e[1])[0]
+                if each_attack_stats:
+                    adversary = META_ATTACKER_INDEX[adversary_indexes[task_idx].item()]
+                    attacker_stats[adversary].append(best_F1)
+
                 all_F1_scores.append(best_F1)
                 all_tau.append(best_tau)
                 stats_per_tau.clear()
@@ -390,9 +400,13 @@ class NeuralFingerprintDetector(object):
                     stats_per_tau[thresh] = Stats(tau=thresh, name=ds_name, ds_name=ds_name)
         F1 = np.mean(all_F1_scores)
         tau = np.mean(all_tau)
+        for adversary, query_F1_score_list in attacker_stats.items():
+            attacker_stats[adversary] = np.mean(query_F1_score_list)
+
+
         del test_net
         print("final   F1: {}  tau:{}".format( F1, tau))
-        return F1, tau
+        return F1, tau, attacker_stats
 
 
 

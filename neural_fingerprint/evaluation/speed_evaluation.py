@@ -46,8 +46,7 @@ def evaluate_speed(args):
             num_query = 15
             val_dataset = MetaTaskDataset(20000, num_way, shot, num_query, ds_name, is_train=False,
                                           load_mode=args.load_task_mode,
-                                          protocol=args.protocol, no_random_way=True, adv_arch=args.adv_arch,
-                                          rotate=False)
+                                          protocol=args.protocol, no_random_way=True, adv_arch=args.adv_arch)
             adv_val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=100, shuffle=False)
             mean_time, var_time = detector.test_speed(adv_val_loader, ds_name,
                                                                reject_thresholds, num_updates, args.lr,

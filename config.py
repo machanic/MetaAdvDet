@@ -12,16 +12,16 @@ DATA_ROOT = {"CIFAR-10": "/home1/machen/dataset/CIFAR-10/TRAIN_I_TEST_II",
 
 
 
-TASK_DATA_ROOT = {"CIFAR-10": {"conv3":"/home1/machen/dataset/CIFAR-10/TRAIN_I_TEST_II",
+TASK_DATA_ROOT = {"CIFAR-10": {"conv3":"/home1/machen/dataset/CIFAR-10/adversarial_images/conv4/TRAIN_I_TEST_II",
                                "resnet10":"/home1/machen/dataset/CIFAR-10/adversarial_images/resnet10/TRAIN_I_TEST_II",
                                 "resnet18": "/home1/machen/dataset/CIFAR-10/adversarial_images/resnet18/TRAIN_I_TEST_II"},
-                  "MNIST": {"conv3": "/home1/machen/dataset/MNIST/TRAIN_I_TEST_II",
+                  "MNIST": {"conv3": "/home1/machen/dataset/MNIST/adversarial_images/conv4/TRAIN_I_TEST_II",
                             "resnet10": "/home1/machen/dataset/MNIST/adversarial_images/resnet10/TRAIN_I_TEST_II",
                             "resnet18": "/home1/machen/dataset/MNIST/adversarial_images/resnet18/TRAIN_I_TEST_II"},
-             "SVHN" : {"conv3": "/home1/machen/dataset/SVHN/TRAIN_I_TEST_II",
+             "SVHN" : {"conv3": "/home1/machen/dataset/SVHN/adversarial_images/conv4/TRAIN_I_TEST_II",
                        "resnet10":"/home1/machen/dataset/SVHN/adversarial_images/resnet10/TRAIN_I_TEST_II",
                        "resnet18":"/home1/machen/dataset/SVHN/adversarial_images/resnet18/TRAIN_I_TEST_II"},
-             "F-MNIST": {"conv3": "/home1/machen/dataset/F-MNIST/TRAIN_I_TEST_II",
+             "F-MNIST": {"conv3": "/home1/machen/dataset/F-MNIST/adversarial_images/conv4/TRAIN_I_TEST_II",
                          "resnet10": "/home1/machen/dataset/F-MNIST/adversarial_images/resnet10/TRAIN_I_TEST_II",
                          "resnet18": "/home1/machen/dataset/F-MNIST/adversarial_images/resnet18/TRAIN_I_TEST_II"}}
 
@@ -42,7 +42,8 @@ class Stage(Enum):
 IMAGE_ROTATE_DETECTOR_ANGLES = {"CIFAR-10": [-50, 25,0,25,50], "CIFAR-100": [-50, 25,0,25,50], "SVHN": [-50, 25,0,25,50],
                                 "MNIST":[-30,15,0, 15,30], "F-MNIST":[-30,15,0, 15,30]}
 
-
+META_ATTACKER_INDEX = ["clean", "FGSM", "MI_FGSM_L_infinity", "BIM_L_infinity", "PGD_L_infinity", "SPSA", "CW_L2", "deep_fool_L2", "newton_fool",
+                  "jsma","EAD","spatial_transform","VAT","max_confidence", "semantic", "LBFGS"]
 META_ATTACKER_PART_I = ["clean", "FGSM", "MI_FGSM_L_infinity", "BIM_L_infinity", "PGD_L_infinity","CW_L2","jsma", "SPSA",
                         "VAT", "max_confidence"]
 META_ATTACKER_PART_II = ["clean", "EAD",  "semantic","spatial_transform", "deep_fool_L2", "newton_fool"]

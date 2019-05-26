@@ -1,10 +1,12 @@
+import copy
 import cv2
 import json
 import re
 from collections import defaultdict
 
 from torch.utils import data
-from config import IMAGE_SIZE, DATA_ROOT, IN_CHANNELS, PY_ROOT, TASK_DATA_ROOT, IMAGE_ROTATE_DETECTOR_ANGLES
+from config import IMAGE_SIZE, DATA_ROOT, IN_CHANNELS, PY_ROOT, TASK_DATA_ROOT, IMAGE_ROTATE_DETECTOR_ANGLES, \
+    META_ATTACKER_INDEX
 import os
 import random
 
@@ -25,7 +27,7 @@ class MetaTaskDataset(data.Dataset):
     """
 
     def __init__(self, num_tot_tasks, num_classes, num_support, num_query,
-                 dataset, is_train, load_mode, protocol, no_random_way, adv_arch, rotate=False):
+                 dataset, is_train, load_mode, protocol, no_random_way, adv_arch, fetch_attack_name=True):
         """
         Args:
             num_samples_per_class: num samples to generate "per class" in one batch
@@ -41,7 +43,7 @@ class MetaTaskDataset(data.Dataset):
         self.no_random_way =  no_random_way
         self.num_support = num_support
         self.num_query = num_query
-        self.rotate = rotate
+        self.fetch_attack_name = fetch_attack_name
         if not self.train:
             assert no_random_way, "In test mode, we must specify the fixed way setting!"
         if protocol == SPLIT_DATA_PROTOCOL.TRAIN_I_TEST_II:
@@ -61,7 +63,7 @@ class MetaTaskDataset(data.Dataset):
         metatrain_folders = []
         metaval_folders = []
         for root_folder in glob.glob(metatrain_folder):
-            for label in os.listdir(root_folder):
+            for label in os.listdir(root_folder):  # label = ClassID_attackIDX
                 if os.path.isdir(os.path.join(root_folder, label)):
                     metatrain_folders.append(os.path.join(root_folder, label))
         for root_folder in glob.glob(metaval_folder):
@@ -115,7 +117,7 @@ class MetaTaskDataset(data.Dataset):
             if i % 100 == 0:
                 print("store {} tasks".format(i))
             p_folder = random.sample(folder_p, 1)  # 只有一个way是正样本
-            n_folder = random.sample(folder_n, self.num_classes - 1)  # 剩余的4-way都是负样本
+            n_folder = random.sample(folder_n, self.num_classes - 1)  # 剩余的1-way都是负样本
             task_folders = p_folder + n_folder  # 共5个文件夹表示5-way
 
             random.shuffle(task_folders) # 从这一句可以看出, 每个task为task_folders随机安排的class id毫无规律可言. 所以no_random_way也是作用在这里
@@ -134,15 +136,15 @@ class MetaTaskDataset(data.Dataset):
                                                                                                        self.num_query,
                                                                                                        is_test=not train)
 
-            for supp_img_gt_label, supp_way_label, supp_adv_label, supp_path in supp_lbs_and_img_paths:
+            for supp_img_gt_label, supp_way_label, supp_adv_label, adversary, supp_path in supp_lbs_and_img_paths:
                 self.all_tasks[i].append({"task_idx":i,"pos_label": positive_label,"img_path": supp_path,
                                          "img_gt_label":supp_img_gt_label,"way_label": supp_way_label,
-                                              "adv_label": supp_adv_label, "type":"support"})
+                                              "adv_label": supp_adv_label, "adversary": adversary, "type":"support"})
 
-            for query_img_gt_label, query_way_label, query_adv_label, query_path in query_lbs_and_img_paths:
+            for query_img_gt_label, query_way_label, query_adv_label, adversary, query_path in query_lbs_and_img_paths:
                 self.all_tasks[i].append({"task_idx": i, "pos_label": positive_label, "img_path": query_path,
                                      "img_gt_label": query_img_gt_label,"way_label": query_way_label,
-                                          "adv_label": query_adv_label, "type":"query"})
+                                          "adv_label": query_adv_label, "adversary": adversary, "type":"query"})
 
         self.dump_task(self.all_tasks, task_dump_txt_path)
 
@@ -173,7 +175,6 @@ class MetaTaskDataset(data.Dataset):
                 positive_label = i
             if not is_test:
                 path = orig_path
-                # 如果不是
                 npy_path = orig_path + "/train.npy"
                 with open(path + "/" + "count.txt", "r") as file_obj:
                     N = int(file_obj.read().strip())
@@ -190,19 +191,21 @@ class MetaTaskDataset(data.Dataset):
                     ma = extract_gt_label_pattern.match(whole_path)
                     img_gt_label = int(ma.group(1))
                     adv_label = int(ma.group(2))
+                    adversary = META_ATTACKER_INDEX[adv_label - 1]
                     if adv_label != 1:
                         adv_label = 0
                     way_label = i
-                    support_images.append((img_gt_label, way_label, adv_label, whole_path))
+                    support_images.append((img_gt_label, way_label, adv_label, adversary, whole_path))
                 for idx in query_idx:
                     whole_path = "{}#{}".format(npy_path, idx)
                     ma = extract_gt_label_pattern.match(whole_path)
                     img_gt_label = int(ma.group(1))
                     adv_label = int(ma.group(2))
+                    adversary = META_ATTACKER_INDEX[adv_label - 1]
                     if adv_label != 1:
                         adv_label = 0
                     way_label = i
-                    query_images.append((img_gt_label, way_label, adv_label, whole_path))
+                    query_images.append((img_gt_label, way_label, adv_label, adversary, whole_path))
             else:
                 for sq in ["support", "query"]:
                     path = orig_path + "/{}".format(sq)
@@ -226,18 +229,24 @@ class MetaTaskDataset(data.Dataset):
                         ma = extract_gt_label_pattern.match(whole_path)
                         img_gt_label = int(ma.group(1))
                         adv_label = int(ma.group(2))
+                        adversary = META_ATTACKER_INDEX[adv_label - 1]
                         if adv_label != 1:
                             adv_label = 0  # real image == 1, adv image == 0
                         way_label = i
-                        label_images.append((img_gt_label, way_label, adv_label, whole_path))
+                        label_images.append((img_gt_label, way_label, adv_label, adversary, whole_path))
 
         return support_images, query_images, positive_label
 
     def __getitem__(self, task_index):
-        task_data_list = self.all_tasks[task_index]  #取出该task的5-way的所有数据
+        task_data_list = self.all_tasks[task_index]  #取出该task的2-way的所有数据
 
-        train_files = [data_json for data_json in task_data_list if data_json["type"] == "support"]
+        train_files = [data_json for data_json in task_data_list if data_json["type"] == "support"] # 2-way, N-shot
         test_files = [data_json for data_json in task_data_list if data_json["type"] == "query"]
+        adversary_list = list(filter(lambda data_json: data_json["adv_label"] == 0, task_data_list))
+        adversary_set = set(e["adversary"] for e in adversary_list)
+        assert len(adversary_set) == 1, len(adversary_set)
+        adversary_index = META_ATTACKER_INDEX.index(list(adversary_set)[0])
+
         try:
             task_positive_label = train_files[0]["pos_label"]
         except IndexError:
@@ -264,10 +273,7 @@ class MetaTaskDataset(data.Dataset):
                                self.dataset] * 32 // 8).copy()
             fobj.close()
             im = im.reshape(IMAGE_SIZE[self.dataset][0], IMAGE_SIZE[self.dataset][1], IN_CHANNELS[self.dataset])
-            if self.rotate:
-                M = cv2.getRotationMatrix2D((im.shape[0] // 2, im.shape[1] // 2),
-                                            random.choice(IMAGE_ROTATE_DETECTOR_ANGLES[self.dataset]), 1)
-                im = cv2.warpAffine(im, M, (im.shape[1], im.shape[0]))
+
             im = np.transpose(im, axes=(2, 0, 1)) # C,H,W
             im2 = im.reshape(self.dim_input)
             image_list.append(im2[np.newaxis, :])  # 加一个新的维度
@@ -277,6 +283,7 @@ class MetaTaskDataset(data.Dataset):
         task_train_ims = np.concatenate(image_list, axis=0)  # N, 3072
         train_adv_labels = np.array(adv_label_list)
         train_img_gt_labels = np.array(img_gt_label_list)
+
         image_list = []
         adv_label_list = []
         img_gt_label_list = []
@@ -296,19 +303,16 @@ class MetaTaskDataset(data.Dataset):
                                self.dataset] * 32 // 8).copy()
             fobj.close()
             im = im.reshape(IMAGE_SIZE[self.dataset][0], IMAGE_SIZE[self.dataset][1], IN_CHANNELS[self.dataset])
-            if self.rotate:
-                M = cv2.getRotationMatrix2D((im.shape[0] // 2, im.shape[1] // 2),
-                                            random.choice(IMAGE_ROTATE_DETECTOR_ANGLES[self.dataset]), 1)
-                im = cv2.warpAffine(im, M, (im.shape[1], im.shape[0]))
+
             im = np.transpose(im, axes=(2, 0, 1))  # C,H,W
             im2 = im.reshape(self.dim_input)
             image_list.append(im2[np.newaxis, :])  # 加一个新的维度
             adv_label_list.append(adv_label)
             img_gt_label_list.append(img_gt_label)
+
         task_test_ims = np.concatenate(image_list, axis=0)  # N C H W
         test_adv_labels = np.array(adv_label_list)
         test_img_gt_labels = np.array(img_gt_label_list)
-
         task_train_ims = torch.from_numpy(task_train_ims)
         train_adv_labels = torch.from_numpy(train_adv_labels)
         train_img_gt_labels = torch.from_numpy(train_img_gt_labels)
@@ -317,7 +321,12 @@ class MetaTaskDataset(data.Dataset):
         test_img_gt_labels = torch.from_numpy(test_img_gt_labels)  # 暂时不用这个
         task_positive_label = torch.Tensor([task_positive_label]).long().view(1, )
         # support_images,support_gt_labels, support_binary_labels, query_images, query_gt_labels, query_binary_labels
-        return task_train_ims, train_img_gt_labels, train_adv_labels, task_test_ims, test_img_gt_labels, test_adv_labels, task_positive_label
+        if self.fetch_attack_name:
+            return task_train_ims, train_img_gt_labels, train_adv_labels,\
+                    task_test_ims, test_img_gt_labels, test_adv_labels, adversary_index, task_positive_label
+        else:
+            return task_train_ims, train_img_gt_labels, train_adv_labels, task_test_ims, test_img_gt_labels, test_adv_labels, \
+                   task_positive_label
 
     def __len__(self):
         return len(self.all_tasks)

@@ -79,7 +79,7 @@ def main():
                               args.epoch, args.num_updates, args.load_task_mode,
                               args.split_protocol, args.arch, args.tot_num_tasks, args.num_support, args.num_query,
                               args.no_random_way,
-                              param_prefix, train=True, adv_arch=args.adv_arch, rotate=args.rotate)
+                              param_prefix, train=True, adv_arch=args.adv_arch)
         # epoch 5-way  k-shot num_updates num_support num_query meta_lr inner_lr
 
         resume_epoch = 0

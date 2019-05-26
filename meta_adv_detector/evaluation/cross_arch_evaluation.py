@@ -7,6 +7,7 @@ import torch
 import json
 from config import PY_ROOT
 from dataset.protocol_enum import SPLIT_DATA_PROTOCOL
+from evaluation_toolkit.evaluation import finetune_eval_task_accuracy
 from meta_adv_detector.meta_adv_det import MetaLearner
 
 def meta_cross_arch_evaluate(args):
@@ -50,7 +51,7 @@ def meta_cross_arch_evaluate(args):
                                   split_protocol, arch, args.tot_num_tasks, shot, 15,
                                   True, param_prefix, train=False, adv_arch=args.cross_arch_target, need_val=True)
             learner.network.load_state_dict(checkpoint['state_dict'], strict=True)
-            result_json = learner.test_task_F1(-1)
+            result_json = finetune_eval_task_accuracy(learner.network,learner.val_loader, learner.inner_step_size, learner.test_finetune_updates,update_BN=True)
             report_result[dataset + "@" + args.cross_arch_source + "--" + args.cross_arch_target][shot] = result_json
     with open("{}/train_pytorch_model/{}/{}--{}@finetune_{}_result.json".format(PY_ROOT, args.study_subject,
                                                                                 args.cross_arch_source,

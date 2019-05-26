@@ -1,19 +1,12 @@
 import copy
-import glob
-import json
-import os
-import re
 from collections import defaultdict
 
 import numpy as np
 import torch
 from torch.optim import SGD
 
-from config import PY_ROOT, LEAVE_ONE_OUT_DATA_ROOT, IMAGE_DATA_ROOT
-from dataset.protocol_enum import SPLIT_DATA_PROTOCOL
-from meta_adv_detector.meta_adv_det import MetaLearner
+from config import META_ATTACKER_INDEX
 from meta_adv_detector.score import forward_pass, evaluate_two_way
-from meta_adv_detector.white_box_meta_adv_det import MetaLearner as MetaLearnerWhiteBox
 
 
 def accuracy(output, target, topk=(1,)):
@@ -78,14 +71,20 @@ def finetune_eval_task_rotate(network, val_loader, inner_lr, num_updates, update
     del test_net
     return result_json
 
-
+# 这里加入每个attack攻击类型分别统计的代码
 def finetune_eval_task_accuracy(network, val_loader, inner_lr, num_updates, update_BN=True, limit=-1):
-    # test_net = copy.deepcopy(network)
     # Select ten tasks randomly from the test set to evaluate_accuracy on
-    support_F1_list,  query_F1_list = [], []
     test_net = copy.deepcopy(network)
+    support_F1_list,  query_F1_list = [], []
+
     # support_images,support_gt_labels, support_binary_labels, query_images, query_gt_labels, query_binary_labels
-    for val_idx, (support_images, _, support_labels, query_images, _, query_labels, positive_labels) in enumerate(val_loader):
+    each_attack_stats = val_loader.dataset.fetch_attack_name
+    attack_stats = defaultdict(list)
+    for pack in val_loader:
+        if each_attack_stats:
+            support_images, _, support_labels, query_images, _, query_labels, adversary_indexes, positive_labels = pack
+        else:
+            support_images, _, support_labels, query_images, _, query_labels, positive_labels = pack
         # print("process task {}  task_batch={}".format(val_idx, len(support_images)))
         support_labels = support_labels.cuda()
         query_labels = query_labels.cuda()
@@ -95,6 +94,7 @@ def finetune_eval_task_accuracy(network, val_loader, inner_lr, num_updates, upda
             test_net.cuda()
             test_opt = SGD(test_net.parameters(), lr=inner_lr)
             support_task, support_target = support_images[task_idx], support_labels[task_idx]
+
             test_net.train()
             if not update_BN:
                 for m in test_net.modules():
@@ -109,6 +109,9 @@ def finetune_eval_task_accuracy(network, val_loader, inner_lr, num_updates, upda
             # Evaluate the trained model on train and val examples
             support_acc, support_F1_score = evaluate_two_way(test_net, support_task, support_target)
             query_acc, query_F1_score = evaluate_two_way(test_net, query_images[task_idx], query_labels[task_idx])
+            if each_attack_stats:
+                adversary = META_ATTACKER_INDEX[adversary_indexes[task_idx].item()]
+                attack_stats[adversary].append(query_F1_score)
             support_F1_list.append(support_F1_score)
             query_F1_list.append(query_F1_score)
             if limit > 0 and len(query_F1_list) >= limit:
@@ -116,44 +119,16 @@ def finetune_eval_task_accuracy(network, val_loader, inner_lr, num_updates, upda
 
     support_F1 = np.mean(np.array(support_F1_list))
     query_F1 = np.mean(np.array(query_F1_list))
-    result_json = {"query_F1":query_F1, "num_updates": num_updates}
+    for adversary, query_F1_score_list in attack_stats.items():
+        attack_stats[adversary] = np.mean(query_F1_score_list)
+    if each_attack_stats:
+        result_json = {"query_F1":query_F1, "num_updates": num_updates, "attack_stats": attack_stats}
+    else:
+        result_json = {"query_F1":query_F1, "num_updates": num_updates}
     print('-------------------------')
     print('Support F1: {}'.format(support_F1))
     print('Query F1: {}'.format(query_F1))
     print('-------------------------')
     del test_net
     return result_json
-
-def leave_one_out_evaluate(args):
-    extract_pattern = re.compile(".*/MAML@(.*?)@leave_(.*?)@.*?@meta_batch_size_(\d+).*?@way_(\d+)@shot_(\d+)@.*?@lr_(.*?)@inner_lr_(.*?)@.*")
-    report_result = defaultdict(dict)
-    get_test_folder = lambda dataset, adversary: LEAVE_ONE_OUT_DATA_ROOT[dataset] + "/" + adversary
-    for model_path in glob.glob("{}/train_pytorch_model/{}/MAML@*".format(PY_ROOT, args.study_subject)):
-        checkpoint = torch.load(model_path, map_location=lambda storage, location: storage)
-        ma = extract_pattern.match(model_path)
-        dataset = ma.group(1)
-        adversary = ma.group(2)
-        meta_batch_size = int(ma.group(3))
-        way = int(ma.group(4))
-        shot = int(ma.group(5))
-        meta_lr = float(ma.group(6))
-        inner_lr = float(ma.group(7))
-        task_dump_path = args.task_dump_path + "/LEAVE_ONE_FOR_TEST/" + dataset
-        print("check {}, {}".format(adversary, dataset))
-        leave_out_folder = get_test_folder(dataset, adversary)
-        learner = MetaLearner(dataset, way, meta_batch_size, meta_lr, inner_lr,
-                              args.lr_decay_itr,
-                              args.epoch, args.test_num_updates, args.load_task_mode, task_dump_path,
-                              args.split_protocol, args.arch, args.tot_num_tasks, shot, args.num_query,
-                              True,
-                              "", train=False, leave_out_attack_dir=leave_out_folder)
-        learner.network.load_state_dict(checkpoint['state_dict'], strict=True)
-        result_json  = learner.test_task_F1(-1, use_positive_position=True)
-        report_result[dataset + "@" + adversary][shot] = result_json["query_F1"]
-    with open("{}/train_pytorch_model/{}/{}_result.json".format(PY_ROOT, args.study_subject, dataset),
-              "w") as file_obj:
-        file_obj.write(json.dumps(report_result))
-        file_obj.flush()
-    print("write to "+ "{}/train_pytorch_model/{}/{}_result.json".format(PY_ROOT, args.study_subject, dataset))
-    return report_result
 

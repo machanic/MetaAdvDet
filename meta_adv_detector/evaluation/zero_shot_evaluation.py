@@ -7,6 +7,7 @@ import torch
 
 from config import PY_ROOT
 from dataset.protocol_enum import SPLIT_DATA_PROTOCOL
+from evaluation_toolkit.evaluation import finetune_eval_task_accuracy
 from meta_adv_detector.meta_adv_det import MetaLearner
 
 
@@ -53,7 +54,7 @@ def meta_zero_shot_evaluate(args):
                               no_random_way=True,
                               tensorboard_data_prefix=param_prefix, train=False, adv_arch=args.adv_arch,need_val=True)
         learner.network.load_state_dict(checkpoint['state_dict'], strict=True)
-        result_json = learner.test_task_F1(iter=-1)
+        result_json = finetune_eval_task_accuracy(learner.network,learner.val_loader, learner.inner_step_size, learner.test_finetune_updates,update_BN=True)
         report_result[dataset][key] = result_json
 
 
