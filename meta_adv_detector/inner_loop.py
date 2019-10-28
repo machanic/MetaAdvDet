@@ -25,12 +25,7 @@ class InnerLoop(nn.Module):
 
     def copy_weights(self, net):
         ''' Set this module's weights to be the same as those of 'net' '''
-
-        for m_from, m_to in zip(net.modules(), self.network.modules()):
-            if isinstance(m_to, nn.Linear) or isinstance(m_to, nn.Conv2d) or isinstance(m_to, nn.BatchNorm2d):
-                m_to.weight.data = m_from.weight.data.clone()
-                if m_to.bias is not None:
-                    m_to.bias.data = m_from.bias.data.clone()
+        self.network.copy_weights(net)
 
     def net_forward(self, x, weights=None):
         return self.network.net_forward(x, weights)

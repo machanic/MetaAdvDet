@@ -8,13 +8,12 @@ from networks.meta_network import MetaNetwork
 
 class Detector(MetaNetwork):
 
-    def __init__(self, dataset_name, network, image_class_number, image_transform, layer_number, fix_cnn, num_classes=2):
-        super(self.__class__, self).__init__(network, IMAGE_SIZE[dataset_name], IN_CHANNELS[dataset_name])
+    def __init__(self, dataset_name, network, image_class_number, image_transform, layer_number, num_classes=2):
+        super(self.__class__, self).__init__(network,IN_CHANNELS[dataset_name], IMAGE_SIZE[dataset_name])
         self.image_transform = image_transform
         self.network = network
         self.layer_number = layer_number
         self.image_class_number = image_class_number
-        self.fix_cnn = fix_cnn
         if layer_number == 2:
             self.network.detector_chain = nn.Sequential(nn.Linear(45 * image_class_number, 128),
                                                 nn.ReLU(),
@@ -41,10 +40,6 @@ class Detector(MetaNetwork):
 
 
     def forward(self, x, random_rotate=False):
-        if self.fix_cnn:
-            with torch.no_grad():
-                logits = self.feature_forward(x,random_rotate) # N,TRANS_NUM, 10
-        else:
-            logits = self.feature_forward(x,random_rotate)  # N,TRANS_NUM, 10
+        logits = self.feature_forward(x,random_rotate)  # N,TRANS_NUM, 10
         prediction = self.network.detector_chain(logits)
         return prediction

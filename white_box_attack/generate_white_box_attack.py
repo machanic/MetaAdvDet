@@ -81,8 +81,7 @@ def build_rotate_detector(dataset, arch, adv_arch, protocol):
     print("load {} to detector".format(model_path))
     image_transform = ImageTransformTorch(dataset, [5, 15])
     layer_number = 3 if dataset in ["CIFAR-10", "CIFAR-100", "SVHN"] else 2
-    detector = Detector(dataset, img_classifier_network, CLASS_NUM[dataset], image_transform, layer_number,
-                        False)
+    detector = Detector(dataset, img_classifier_network, CLASS_NUM[dataset], image_transform, layer_number)
     detector.load_state_dict(checkpoint['state_dict'],strict=True)
     detector.cuda()
     return detector
@@ -135,7 +134,7 @@ def main():
         val_dataset = datasets.CIFAR10(IMAGE_DATA_ROOT[args.dataset], train=False, transform=preprocessor)
     elif args.dataset == "MNIST":
         train_dataset = datasets.MNIST(IMAGE_DATA_ROOT[args.dataset], train=True, transform=preprocessor, download=True)
-        val_dataset = datasets.MNIST(IMAGE_DATA_ROOT[args.dataset], train=False, transform=preprocessor, download=True)  # FIXME
+        val_dataset = datasets.MNIST(IMAGE_DATA_ROOT[args.dataset], train=False, transform=preprocessor, download=True)
     elif args.dataset == "F-MNIST":
         train_dataset = datasets.FashionMNIST(IMAGE_DATA_ROOT[args.dataset], train=True,transform=preprocessor, download=True)
         val_dataset = datasets.FashionMNIST(IMAGE_DATA_ROOT[args.dataset], train=False, transform=preprocessor, download=True)

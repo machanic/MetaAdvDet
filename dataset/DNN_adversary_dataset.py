@@ -6,18 +6,19 @@ import glob
 import re
 import numpy as np
 import os
-
+from lru import LRU
 from dataset.protocol_enum import SPLIT_DATA_PROTOCOL
 
 
 class AdversaryDataset(data.Dataset):
-    def __init__(self, root_path, train, protocol, META_ATTACKER_PART_I, META_ATTACKER_PART_II, balance):
+    def __init__(self, root_path, train, protocol, META_ATTACKER_PART_I, META_ATTACKER_PART_II, balance, use_cache=True):
         self.root_path = root_path
+        self.use_cache = use_cache
         filter_str = "train"
         if not train:
             filter_str = "test"
         extract_pattern = re.compile("(.*?)_untargeted.*")
-        self.cache = {}
+        self.cache = LRU(16)
         self.img_label_list = []
         self.img_label_dict = defaultdict(list)
         for npz_path in glob.glob(root_path + "/*{}.npz".format(filter_str)):
@@ -44,7 +45,8 @@ class AdversaryDataset(data.Dataset):
             if adv_name == "clean":
                 adv_label = 1
                 adv_images = data["adv_images"]
-                self.cache[npz_path] = adv_images
+                if self.use_cache:
+                    self.cache[npz_path] = adv_images
                 indexes = np.arange(adv_images.shape[0])
             else:
                 adv_label = 0
@@ -64,12 +66,13 @@ class AdversaryDataset(data.Dataset):
 
     def __getitem__(self, item):
         npz_path, index, label = self.img_label_list[item]
-        if npz_path in self.cache:
+        if self.use_cache and npz_path in self.cache:
             adv_images = self.cache[npz_path]
         else:
             data = np.load(npz_path)
             adv_images = data["adv_images"]  # 10000,32,32,3
-            self.cache[npz_path] = adv_images
+            if self.use_cache:
+                self.cache[npz_path] = adv_images
 
         adv_image = adv_images[index]
         adv_image = np.transpose(adv_image, (2,0,1))

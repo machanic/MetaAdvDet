@@ -26,6 +26,8 @@ def meta_ablation_study_evaluate(args):
         ma = extract_pattern.match(model_path)
         orig_ma = ma
         dataset = ma.group(1)
+        if dataset == "ImageNet":
+            continue
         split_protocol = SPLIT_DATA_PROTOCOL[ma.group(2)]
         arch = ma.group(3)
         epoch = int(ma.group(4))

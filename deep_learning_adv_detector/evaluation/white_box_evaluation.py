@@ -39,7 +39,7 @@ def evaluate_whitebox(dataset, arch, adv_arch, detector, attack_name, num_update
 
     old_num_update = num_update
     # for shot in range(16):
-    for shot in [1,5]: # FIXME
+    for shot in [0,1,5]:
         if shot == 0:
             shot = 1
             num_update = 0

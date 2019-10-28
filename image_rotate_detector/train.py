@@ -2,6 +2,7 @@ import sys
 
 
 sys.path.append("/home1/machen/adv_detection_meta_learning")
+from dataset.DNN_adversary_random_access_npy_dataset import AdversaryRandomAccessNpyDataset
 
 from image_rotate_detector.evaluation.cross_arch_evaluation import evaluate_cross_arch
 from image_rotate_detector.evaluation.cross_domain_evaluation import evaluate_cross_domain
@@ -12,7 +13,7 @@ from image_rotate_detector.evaluation.zero_shot_evaluation import evaluate_zero_
 from networks.conv3 import Conv3
 from torch.utils.data import DataLoader
 import config
-from dataset.deep_learning_adversary_dataset import AdversaryDataset
+from dataset.DNN_adversary_dataset import AdversaryDataset
 import argparse
 import os
 import random
@@ -42,7 +43,7 @@ import re
 from image_rotate_detector.evaluation.speed_evaluation import evaluate_speed
 
 # 整个程序分两步走:1. 先训练一个图像分类器，分类用原始的gt label; 2.再训练一个 detector，锁定图像分类器的weight
-parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
+parser = argparse.ArgumentParser(description='PyTorch RotateDetection(TransformDet) Training')
 parser.add_argument('-j', '--workers', default=0, type=int, metavar='N',
                     help='number of data loading workers (default: 0)')
 parser.add_argument('--epochs', default=10, type=int, metavar='N',
@@ -65,11 +66,9 @@ parser.add_argument('-p', '--print-freq', default=10, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
-parser.add_argument('-e', '--evaluate_accuracy', dest='evaluate_accuracy', action='store_true',
-                    help='evaluate_accuracy model on validation set')
 parser.add_argument("--evaluate", action="store_true", help="evaluation_toolkit mode")
 parser.add_argument('--seed', default=None, type=int,
-                    help='seed for initializing training. ')
+                    help='seed for initializing training.')
 parser.add_argument("--gpus", nargs='+', action='append', help="used for multi_process")
 parser.add_argument("--protocol", required=True,
                     type=SPLIT_DATA_PROTOCOL, choices=list(SPLIT_DATA_PROTOCOL), help="split data protocol")
@@ -83,7 +82,8 @@ parser.add_argument("--cross_arch_source", type=str)
 parser.add_argument("--cross_arch_target", type=str)
 parser.add_argument("--dataset",type=str, default="CIFAR-10")
 parser.add_argument("--gpu", type=str, default="2")
-parser.add_argument("--adv_arch",default="conv3",type=str)
+parser.add_argument("--adv_arch",default="conv4",type=str)
+parser.add_argument("--arch",default="conv3",type=str)
 parser.add_argument("--load_mode", default=LOAD_TASK_MODE.LOAD,  type=LOAD_TASK_MODE, choices=list(LOAD_TASK_MODE), help="load mode")
 parser.add_argument("--study_subject", type=str)
 parser.add_argument("--eval_update_BN", action="store_true")
@@ -132,24 +132,26 @@ def evaluate_accuracy(net, in_, target_positive, weights=None):
 
 
 def build_network(dataset, arch, model_path):
-    assert os.path.exists(model_path), "{} not exists!".format(model_path)
+    if dataset!="ImageNet":
+        assert os.path.exists(model_path), "{} not exists!".format(model_path)
+
     if arch in models.__dict__:
         print("=> using pre-trained model '{}'".format(arch))
         img_classifier_network = models.__dict__[arch](pretrained=False)
     else:
         print("=> creating model '{}'".format(arch))
         if arch == "resnet10":
-            img_classifier_network = resnet10(num_classes=CLASS_NUM[dataset], in_channels=IN_CHANNELS[dataset])
+            img_classifier_network = resnet10(num_classes=CLASS_NUM[dataset], in_channels=IN_CHANNELS[dataset], pretrained=False)
         elif arch == "resnet18":
-            img_classifier_network = resnet18(num_classes=CLASS_NUM[dataset], in_channels=IN_CHANNELS[dataset])
+            img_classifier_network = resnet18(num_classes=CLASS_NUM[dataset], in_channels=IN_CHANNELS[dataset], pretrained=False)
         elif arch == "conv3":
             img_classifier_network = Conv3(IN_CHANNELS[dataset], IMAGE_SIZE[dataset], CLASS_NUM[dataset])
-
-    print("=> loading checkpoint '{}'".format(model_path))
-    checkpoint = torch.load(model_path,map_location=lambda storage, loc: storage)
-    img_classifier_network.load_state_dict(checkpoint['state_dict'])
-    print("=> loaded checkpoint '{}' (epoch {})"
-          .format(model_path, checkpoint['epoch']))
+    if os.path.exists(model_path):
+        print("=> loading checkpoint '{}'".format(model_path))
+        checkpoint = torch.load(model_path,map_location=lambda storage, loc: storage)
+        img_classifier_network.load_state_dict(checkpoint['state_dict'])
+        print("=> loaded checkpoint '{}' (epoch {})"
+              .format(model_path, checkpoint['epoch']))
     return img_classifier_network
 
 def main_train_worker(args):
@@ -159,13 +161,14 @@ def main_train_worker(args):
     extract_info_pattern = re.compile(".*?DL_IMAGE_CLASSIFIER_(.*?)@(.*?)@epoch_(\d+)@lr_(.*?)@batch_(\d+).pth.tar")
     idx = 0
     # val_txt_task_path = glob.glob("{}/task/{}/{}/test_*.txt".format(PY_ROOT,args.split_data_protocol, dataset))[0]
-    img_classifier_model_path = "{}/train_pytorch_model/DL_IMAGE_CLASSIFIER_{}@conv3@epoch_40@lr_0.0001@batch_500.pth.tar".format(PY_ROOT, args.dataset)
+    img_classifier_model_path = "{}/train_pytorch_model/DL_IMAGE_CLASSIFIER_{}@{}@epoch_40@lr_0.0001@batch_500.pth.tar".format(PY_ROOT,
+                                                                    args.dataset, args.arch)
     ma = extract_info_pattern.match(img_classifier_model_path)
     arch  = ma.group(2)
     gpus = args.gpus[0]
     gpu = gpus[idx % len(gpus)]
     idx += 1
-    train_detector(gpu, arch, args.adv_arch, img_classifier_model_path, args.dataset, args)
+    train_detector(gpu, args.arch, args.adv_arch, img_classifier_model_path, args.dataset, args)
 
 
 def train_detector(gpu, arch, adv_data_arch, img_classifier_model_path,
@@ -175,22 +178,21 @@ def train_detector(gpu, arch, adv_data_arch, img_classifier_model_path,
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu)
 
     img_classifier_network = build_network(dataset, arch, img_classifier_model_path)
-    layer_number = 3 if dataset in ["CIFAR-10","CIFAR-100","SVHN"] else  2
+    layer_number = 3 if dataset in ["ImageNet","CIFAR-10","CIFAR-100","SVHN"] else  2
 
 
-    fix_str = "no_fix_cnn_params"
     if args.use_cv_transform:
         image_transform = ImageTransformCV2(dataset, [1, 2])
-        detector_model_path = '{}/train_pytorch_model/ROTATE_DET/cv2_rotate_model/IMG_ROTATE_DET@{}_{}@model_{}@data_{}@epoch_{}@lr_{}@batch_{}@{}.pth.tar'.format(
-            PY_ROOT, args.dataset, args.protocol, arch, args.adv_arch, args.epochs, args.lr, args.batch_size, fix_str)
+        detector_model_path = '{}/train_pytorch_model/ROTATE_DET/cv2_rotate_model/IMG_ROTATE_DET@{}_{}@model_{}@data_{}@epoch_{}@lr_{}@batch_{}.pth.tar'.format(
+            PY_ROOT, args.dataset, args.protocol, arch, adv_data_arch, args.epochs, args.lr, args.batch_size)
         os.makedirs(os.path.dirname(detector_model_path), exist_ok=True)
     else:
         image_transform = ImageTransformTorch(dataset,[5,15])
-        detector_model_path = '{}/train_pytorch_model/ROTATE_DET/IMG_ROTATE_DET@{}_{}@model_{}@data_{}@epoch_{}@lr_{}@batch_{}@{}.pth.tar'.format(
-            PY_ROOT, args.dataset, args.protocol, arch, args.adv_arch, args.epochs, args.lr, args.batch_size, fix_str)
+        detector_model_path = '{}/train_pytorch_model/ROTATE_DET/IMG_ROTATE_DET@{}_{}@model_{}@data_{}@epoch_{}@lr_{}@batch_{}.pth.tar'.format(
+            PY_ROOT, args.dataset, args.protocol, arch, adv_data_arch, args.epochs, args.lr, args.batch_size)
         os.makedirs(os.path.dirname(detector_model_path), exist_ok=True)
 
-    detector = Detector(dataset, img_classifier_network, CLASS_NUM[dataset], image_transform, layer_number, False)
+    detector = Detector(dataset, img_classifier_network, CLASS_NUM[dataset], image_transform, layer_number)
     detector.cuda()
     optimizer = torch.optim.SGD(detector.parameters(), args.lr,
                                 momentum=args.momentum,
@@ -200,11 +202,17 @@ def train_detector(gpu, arch, adv_data_arch, img_classifier_model_path,
         args.balance = True
     else:
         args.balance = False
-    train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[dataset] + "/adversarial_images/{}".format(adv_data_arch), True,
+    if dataset == "ImageNet":
+        train_dataset = AdversaryRandomAccessNpyDataset(
+            IMAGE_DATA_ROOT[dataset] + "/adversarial_images/{}".format(adv_data_arch),
+            True, args.protocol, config.META_ATTACKER_PART_I, config.META_ATTACKER_PART_II,
+            args.balance, dataset)
+    else:
+        train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[dataset] + "/adversarial_images/{}".format(adv_data_arch), True,
                                      args.protocol, config.META_ATTACKER_PART_I, config.META_ATTACKER_PART_II,balance=args.balance)
     train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
-        num_workers=0, pin_memory=True)
+        num_workers=args.workers, pin_memory=True)
     train_epochs(detector_model_path, train_loader, detector, optimizer, arch, args, args.gpu)
 
 def train_epochs(detector_model_path, train_loader, detector, optimizer, arch, args, gpu):

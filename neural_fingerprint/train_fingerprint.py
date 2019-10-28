@@ -1,14 +1,17 @@
 from __future__ import print_function
+
 import os.path
-import pstats
 import sys
+
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir))
+
+from dataset.imagenet_real_dataset import ImageNetRealDataset
+
 
 from dataset.meta_task_dataset import MetaTaskDataset
 
 from collections import defaultdict
 
-import config
 from neural_fingerprint.evaluation.speed_evaluation import evaluate_speed
 
 import argparse
@@ -41,7 +44,7 @@ def parse_args():
                         help='input batch size for testing (default: 1000)')
     parser.add_argument('--epochs', type=int, default=80, metavar='N',
                         help='number of epochs to train (default: 80)')  # CIFAR-10:80, MNIST:1
-    parser.add_argument('--lr', type=float, default=0.0001, metavar='LR',
+    parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
                         help='learning rate (default: 0.001)')  # MNIST应该用更低的值
     parser.add_argument('--gpu', type=int, default=0,
                         help='the GPU for train')
@@ -49,9 +52,10 @@ def parse_args():
                         help='random seed (default: 1)')
     parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                         help='how many batches to wait before logging training status')
-
-    parser.add_argument('--eps', type=float, default=0.1)  # 0.003 0.006 0.01 都试试
-    parser.add_argument('--num-dx', type=int, default=5)  # 5 10 30  都试试
+    parser.add_argument('-j', '--workers', default=0, type=int, metavar='N',
+                        help='number of data loading workers (default: 4)')
+    parser.add_argument('--eps', type=float, default=0.003)  # 0.003 0.006 0.01 都试试
+    parser.add_argument('--num-dx', type=int, default=30)  # 5 10 30  都试试
     parser.add_argument("--output_dx_dy_dir",type=str, default="/home1/machen/adv_detection_meta_learning/NF_dx_dy")
     parser.add_argument("--evaluate",action="store_true",help="eval with fingerprint")
     parser.add_argument("--protocol",
@@ -64,7 +68,7 @@ def parse_args():
     parser.add_argument("--log-dir")
     parser.add_argument("--profile", action="store_true", help="use profile to stats evaluation speed")
     parser.add_argument("--study_subject",type=str)
-    parser.add_argument("--adv_arch",type=str, default="conv3")
+    parser.add_argument("--adv_arch",type=str, default="conv4")
     parser.add_argument("--cross_domain_source",type=str)
     parser.add_argument("--best_tau",type=float,default=1.475234)
     parser.add_argument("--cross_domain_target", type=str)
@@ -81,8 +85,8 @@ def main():
     args = parse_args()
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed(args.seed)
-    transform = get_preprocessor(IN_CHANNELS[args.ds_name]) # NeuralFP的MNIST和F-MNIST实验需要重做，因为发现单通道bug
-    kwargs = {'num_workers': 0, 'pin_memory': True}
+    transform = get_preprocessor(IN_CHANNELS[args.ds_name], IMAGE_SIZE[args.ds_name]) # NeuralFP的MNIST和F-MNIST实验需要重做，因为发现单通道bug
+    kwargs = {'pin_memory': True}
     if not args.evaluate: # 训练模式
         if args.ds_name == "MNIST":
             trn_dataset = datasets.MNIST(IMAGE_DATA_ROOT[args.ds_name], train=True, download=False, transform=transform)
@@ -101,13 +105,16 @@ def main():
         elif args.ds_name == "SVHN":
             trn_dataset = SVHN(IMAGE_DATA_ROOT[args.ds_name], train=True, transform=transform)
             val_dataset = SVHN(IMAGE_DATA_ROOT[args.ds_name], train=False, transform=transform)
+        elif args.ds_name == "ImageNet":
+            trn_dataset = ImageNetRealDataset(IMAGE_DATA_ROOT[args.ds_name] + "/new2", train=True, transform=transform)
+            val_dataset = ImageNetRealDataset(IMAGE_DATA_ROOT[args.ds_name] + "/new2", train=False, transform=transform)
 
         train_loader = torch.utils.data.DataLoader(
             trn_dataset,
-            batch_size=args.batch_size, shuffle=True, **kwargs)
+            batch_size=args.batch_size, shuffle=True, num_workers=args.workers, **kwargs)
         test_loader = torch.utils.data.DataLoader(
             val_dataset,
-            batch_size=args.test_batch_size, shuffle=False, **kwargs)
+            batch_size=args.test_batch_size, shuffle=False,num_workers=0, **kwargs)
 
         if args.arch == "conv3":
             network = Conv3(IN_CHANNELS[args.ds_name], IMAGE_SIZE[args.ds_name], CLASS_NUM[args.ds_name])
@@ -129,6 +136,7 @@ def main():
 
         optimizer = optim.SGD(network.parameters(), lr=args.lr,weight_decay=1e-6, momentum=0.9)
         resume_epoch = 0
+        print("{}".format(model_path))
         if os.path.exists(model_path):
             checkpoint = torch.load(model_path, lambda storage, location: storage)
             optimizer.load_state_dict(checkpoint["optimizer"])
@@ -158,6 +166,11 @@ def main():
         for model_path in glob.glob("{}/train_pytorch_model/NF_Det/NF_Det@*".format(PY_ROOT)):
             ma = extract_pattern.match(model_path)
             ds_name = ma.group(1)
+            # if ds_name == "ImageNet": # FIXME
+            #     continue
+            # if ds_name != "CIFAR-10": # FIXME
+            #     continue
+
             arch = ma.group(2)
             epoch = int(ma.group(3))
             num_dx = int(ma.group(6))
@@ -177,7 +190,7 @@ def main():
             # 不存在cross arch的概念
             if args.study_subject == "shots":
                 all_shots = [0,1,5]
-                query_count = 15
+                # threhold_dict = {0:0.885896, 1:1.23128099999,5:1.33487699}
                 old_updates = args.num_updates
                 # threhold_dict = {0:0.885896, 1:1.23128099999,5:1.33487699}
                 for shot in all_shots:
@@ -190,7 +203,7 @@ def main():
                     num_way = 2
                     num_query = 15
                     val_dataset = MetaTaskDataset(20000, num_way, shot, num_query,ds_name,is_train=False,load_mode=args.load_task_mode,
-                                                  protocol=args.protocol,no_random_way=True, adv_arch=args.adv_arch)
+                                                  protocol=args.protocol,no_random_way=True, adv_arch=args.adv_arch, fetch_attack_name=True)
                     adv_val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=100, shuffle=False, **kwargs)
                     # if args.profile:
                     #     cProfile.runctx("detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name, reject_thresholds, args.num_updates, args.lr)", globals(), locals(), "Profile.prof")
@@ -207,6 +220,7 @@ def main():
                 source_dataset, target_dataset = args.cross_domain_source, args.cross_domain_target
                 if ds_name!= source_dataset:
                     continue
+                # threhold_dict = {0: 0.885896, 1: 1.23128099999, 5: 1.33487699}
                 old_num_update = args.num_updates
                 # threhold_dict = {0: 0.885896, 1: 1.23128099999, 5: 1.33487699}
                 for shot in [0, 1, 5]:
@@ -220,17 +234,17 @@ def main():
                     num_query = 15
                     val_dataset = MetaTaskDataset(20000, num_way, shot, num_query, target_dataset, is_train=False,
                                                   load_mode=args.load_task_mode,
-                                                  protocol=args.protocol, no_random_way=True, adv_arch=args.adv_arch)
+                                                  protocol=args.protocol, no_random_way=True, adv_arch=args.adv_arch, fetch_attack_name=False)
                     adv_val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=100, shuffle=False, **kwargs)
                     F1, tau, attacker_stats = detector.eval_with_fingerprints_finetune(adv_val_loader, target_dataset,
                                                                        reject_thresholds, args.num_updates, args.lr)
-                    results["{}--{}".format(source_dataset, target_dataset)][report_shot] = {"F1":F1,  "best_tau":tau,
+                    results["{}--{}@data_adv_arch_{}".format(source_dataset, target_dataset,args.adv_arch)][report_shot] = {"F1":F1,  "best_tau":tau,
                                                                                              "eps":eps, "num_dx":num_dx,
                                                                             "num_updates":args.num_updates, "attack_stats":attacker_stats}
             elif args.study_subject == "cross_arch":
                 target_arch = args.cross_arch_target
                 old_num_update = args.num_updates
-                for shot in [1, 5]:
+                for shot in [0, 1, 5]:
                     report_shot = shot
                     if shot == 0:
                         shot = 1
@@ -241,7 +255,7 @@ def main():
                     num_query = 15
                     val_dataset = MetaTaskDataset(20000, num_way, shot, num_query, ds_name, is_train=False,
                                                   load_mode=args.load_task_mode,
-                                                  protocol=args.protocol, no_random_way=True, adv_arch=target_arch)
+                                                  protocol=args.protocol, no_random_way=True, adv_arch=target_arch, fetch_attack_name=False)
                     adv_val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=100, shuffle=False, **kwargs)
                     F1, tau, attacker_stats = detector.eval_with_fingerprints_finetune(adv_val_loader, ds_name,
                                                                        reject_thresholds, args.num_updates, args.lr)
@@ -281,7 +295,8 @@ def main():
 
         if not args.profile:
             if args.study_subject == "cross_domain":
-                filename = "{}/train_pytorch_model/NF_Det/cross_domain_{}--{}.json".format(PY_ROOT,args.cross_domain_source, args.cross_domain_target)
+                filename = "{}/train_pytorch_model/NF_Det/cross_domain_{}--{}@adv_arch_{}.json".format(PY_ROOT,args.cross_domain_source,
+                                                                                                       args.cross_domain_target, args.adv_arch)
             elif args.study_subject == "cross_arch":
                 filename = "{}/train_pytorch_model/NF_Det/cross_arch_target_{}.json".format(PY_ROOT,
                                                                                            args.cross_arch_target)

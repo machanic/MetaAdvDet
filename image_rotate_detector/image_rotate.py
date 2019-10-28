@@ -41,7 +41,7 @@ class ImageTransformCV2(object):
 
     def shift_pixel_cv2(self, xs):
         new_xs = []
-        for x in xs:
+        for x in xs:  # xs shape = (N,H,W,C)
             for direction, shift_pixels in self.pixels_shift_dict.items():
                 for shift_pixel in shift_pixels:
                     if direction == Direction.left:

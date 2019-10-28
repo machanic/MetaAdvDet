@@ -3,8 +3,8 @@ import sys
 
 
 sys.path.append("/home1/machen/adv_detection_meta_learning")
-from meta_adv_detector.evaluation import meta_ablation_study_evaluate, meta_cross_domain_evaluate, \
-                                            meta_cross_arch_evaluate,meta_white_box_attack_evaluate,meta_zero_shot_evaluate
+from meta_adv_detector.evaluation import meta_ablation_study_evaluate, meta_cross_domain_evaluate, meta_cross_arch_evaluate,\
+    meta_white_box_attack_evaluate,meta_zero_shot_evaluate
 
 from dataset.protocol_enum import SPLIT_DATA_PROTOCOL, LOAD_TASK_MODE
 import argparse
@@ -27,20 +27,21 @@ def parse_args():
     parser.add_argument('--lr_decay_itr',type=int, default=7000, help="* 1/10. the number of iteration that the meta lr should decay")
     parser.add_argument('--num_support',type=int, default=1, help='number/shots of examples used for inner gradient update (K for K-shot learning) in one way.')
     parser.add_argument('--num_query', type=int, default=35,
-                        help='number of examples of each class in query set in one way.')
+                        help="number of examples of each class in query set of TRAIN PHASE's each way.")
     parser.add_argument('--num_updates', type=int, default=12,
                         help='number of inner gradient updates(on support set) during training.')
     parser.add_argument('--tot_num_tasks', type=int, default=20000, help='the maximum number of tasks in total, which is repeatly processed in training.')
-    parser.add_argument('--arch', type=str, default='conv3', choices=["resnet10", "resnet18", "densenet121", "conv3",  "vgg11", "vgg11_bn", "vgg13", "vgg13_bn", "vgg16", "vgg16_bn"],help='network name')  #10 层
+    parser.add_argument('--arch', type=str, default='conv3', choices=["resnet10", "resnet18",
+                                                                      "densenet121", "conv3",  "vgg11", "vgg11_bn",
+                                                                      "vgg13", "vgg13_bn", "vgg16", "vgg16_bn"],help='network name')  #10 层
     parser.add_argument('--test_num_updates', type=int, default=20, help='number of inner gradient updates during testing')
     parser.add_argument("--dataset", type=str, default="CIFAR-10", help="the dataset to train")
     parser.add_argument("--split_protocol", type=SPLIT_DATA_PROTOCOL,choices=list(SPLIT_DATA_PROTOCOL), help="split protocol of data")
     parser.add_argument("--load_task_mode", default=LOAD_TASK_MODE.LOAD, type=LOAD_TASK_MODE, choices=list(LOAD_TASK_MODE), help="load task mode")
     parser.add_argument("--no_random_way", action="store_true", help="whether to randomize the way")
     parser.add_argument("--rotate", action="store_true",help="randomly rotate image before training")
-    parser.add_argument("--evaluate_accuracy", action="store_true", help="to evaluate_accuracy the pretrained model")
     parser.add_argument("--study_subject", type=str, required=True)
-    parser.add_argument("--adv_arch", type=str, default="conv3", choices=["conv3","resnet10","resnet18"])
+    parser.add_argument("--adv_arch", type=str, default="conv4", choices=["conv4","resnet10","resnet18"])
     parser.add_argument("--cross_domain_target", type=str, help="the target domain to evaluate_accuracy")
     parser.add_argument("--cross_domain_source", type=str, help="the target domain to evaluate_accuracy")
     parser.add_argument("--cross_arch_source", type=str, help="the source arch to evaluate_accuracy")
@@ -91,7 +92,7 @@ def main():
             learner.opt.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(model_path, checkpoint['epoch']))
-
+        print("after training, model will be stored in {}".format(model_path))
         learner.train(model_path, resume_epoch, need_val=False)
     else: # 测试模式
         # MAML@CIFAR-10_TRAIN_I_TEST_II@conv4@epoch_40@meta_batch_size_10@way_2@shot_1@num_query_15@num_updates_2@lr_0.001@inner_lr_0.01.pth.tar

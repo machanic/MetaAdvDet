@@ -3,6 +3,8 @@ from torch import nn
 from collections import defaultdict
 import types
 from functools import partial, update_wrapper
+import torch
+import math
 
 def conv_weight_forward(self, x, conv_fc_module_to_name, param_dict):
     module_weight_name = conv_fc_module_to_name[self]["weight"]
@@ -46,21 +48,42 @@ def bn_forward(self, x, conv_fc_module_to_name, param_dict):
 
 
 class MetaNetwork(nn.Module):
-    def __init__(self, network, img_size, in_channels):
+    def __init__(self, network, in_channels, img_size):
         super(MetaNetwork, self).__init__()
         self.channels = in_channels
         self.img_size = img_size
         self.network = network
         self.loss_fn = nn.CrossEntropyLoss()
-        self.conv_fc_module_to_name = self.construct_weights()
+        self.conv_fc_module_to_name = self.construct_module_name_dict()
+        self._init_weights()
 
-    def construct_weights(self):
+    def _init_weights(self):
+        ''' Set weights to Gaussian, biases to zero '''
+        torch.manual_seed(1337)
+        torch.cuda.manual_seed(1337)
+        torch.cuda.manual_seed_all(1337)
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+                if m.bias is not None:
+                    m.bias.data.zero_()
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                n = m.weight.size(1)
+                m.weight.data.normal_(0, 0.01)
+                # m.bias.data.zero_() + 1
+                m.bias.data = torch.ones(m.bias.data.size())
+
+    def construct_module_name_dict(self):
         module_to_name = defaultdict(dict)
         for name, module in self.network.named_modules():
             if isinstance(module, nn.Conv2d) or isinstance(module, nn.Linear) or isinstance(module, nn.BatchNorm2d):
-                module_to_name[module]["weight"] = "network.network.{}.weight".format(name)
+                module_to_name[module]["weight"] = "network.{}.weight".format(name)
                 if module.bias is not None:
-                    module_to_name[module]["bias"] = "network.network.{}.bias".format(name)
+                    module_to_name[module]["bias"] = "network.{}.bias".format(name)
         return module_to_name
 
     def backup_orig_forward(self, module):
@@ -90,7 +113,6 @@ class MetaNetwork(nn.Module):
                                      param_dict=weight)
 
     def forward(self,x):
-
         return self.network(x)
 
     def copy_weights(self, net):
@@ -102,12 +124,17 @@ class MetaNetwork(nn.Module):
                     m_to.bias.data = m_from.bias.data.clone()
 
     def net_forward(self, x, weight=None):
-        if weight is None:
-            self.network.apply(self.backup_orig_forward)  # 备份原本的forward函数
+        self.network.apply(self.backup_orig_forward)  # 备份原本的forward函数
         x = x.view(-1, self.channels, self.img_size[0], self.img_size[1])
         if weight is not None:
             self.network.apply(partial(self.replace_forward, weight=weight))
         output = self.forward(x)
-        if weight is not None:
-            self.network.apply(self.recover_orig_forward)
+        self.network.apply(self.recover_orig_forward)
         return output
+
+    def forward_pass(self, in_, target, weight=None):
+        input_var = in_.cuda()
+        target_var = target.cuda()
+        out = self.net_forward(input_var, weight)
+        loss = self.loss_fn(out, target_var)
+        return loss, out

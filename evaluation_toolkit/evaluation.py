@@ -1,4 +1,6 @@
 import copy
+import random
+import time
 from collections import defaultdict
 
 import numpy as np
@@ -76,11 +78,10 @@ def finetune_eval_task_accuracy(network, val_loader, inner_lr, num_updates, upda
     # Select ten tasks randomly from the test set to evaluate_accuracy on
     test_net = copy.deepcopy(network)
     support_F1_list,  query_F1_list = [], []
-
     # support_images,support_gt_labels, support_binary_labels, query_images, query_gt_labels, query_binary_labels
     each_attack_stats = val_loader.dataset.fetch_attack_name
     attack_stats = defaultdict(list)
-    for pack in val_loader:
+    for idx, pack in enumerate(val_loader):
         if each_attack_stats:
             support_images, _, support_labels, query_images, _, query_labels, adversary_indexes, positive_labels = pack
         else:
@@ -90,6 +91,7 @@ def finetune_eval_task_accuracy(network, val_loader, inner_lr, num_updates, upda
         query_labels = query_labels.cuda()
         for task_idx in range(support_images.size(0)):
             # Make a test net with same parameters as our current net
+            start_time = time.time()
             test_net = copy.deepcopy(network)
             test_net.cuda()
             test_opt = SGD(test_net.parameters(), lr=inner_lr)
@@ -109,6 +111,8 @@ def finetune_eval_task_accuracy(network, val_loader, inner_lr, num_updates, upda
             # Evaluate the trained model on train and val examples
             support_acc, support_F1_score = evaluate_two_way(test_net, support_task, support_target)
             query_acc, query_F1_score = evaluate_two_way(test_net, query_images[task_idx], query_labels[task_idx])
+
+            torch.cuda.empty_cache()
             if each_attack_stats:
                 adversary = META_ATTACKER_INDEX[adversary_indexes[task_idx].item()]
                 attack_stats[adversary].append(query_F1_score)
@@ -129,6 +133,5 @@ def finetune_eval_task_accuracy(network, val_loader, inner_lr, num_updates, upda
     print('Support F1: {}'.format(support_F1))
     print('Query F1: {}'.format(query_F1))
     print('-------------------------')
-    del test_net
     return result_json
 

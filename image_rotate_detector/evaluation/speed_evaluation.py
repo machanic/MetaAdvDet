@@ -102,13 +102,13 @@ def evaluate_speed(args):
                 num_updates = args.num_updates
             meta_task_dataset = MetaTaskDataset(tot_num_tasks, num_classes, shot, num_query,
                                                 dataset, is_train=False, load_mode=LOAD_TASK_MODE.LOAD,
-                                                protocol=split_protocol, no_random_way=True, adv_arch="conv3")  # FIXME adv arch还没做cross arch的代码
+                                                protocol=split_protocol, no_random_way=True, adv_arch="conv3") #FIXME adv arch还没做其他architecture的代码
             data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
             img_classifier_network = Conv3(IN_CHANNELS[dataset], IMAGE_SIZE[dataset],
                                                    CLASS_NUM[dataset])
             image_transform = ImageTransformCV2(dataset, [1, 2])
             layer_number = 3 if dataset in ["CIFAR-10", "CIFAR-100", "SVHN"] else 2
-            model = Detector(dataset, img_classifier_network, CLASS_NUM[dataset],image_transform, layer_number, False,num_classes=2)
+            model = Detector(dataset, img_classifier_network, CLASS_NUM[dataset],image_transform, layer_number,num_classes=2)
             checkpoint = torch.load(model_path, map_location=lambda storage, location: storage)
             model.load_state_dict(checkpoint['state_dict'])
             model.cuda()

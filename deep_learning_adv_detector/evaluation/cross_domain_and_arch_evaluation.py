@@ -13,7 +13,7 @@ import torch
 
 
 
-def evaluate_cross_arch(model_path_list, num_update, lr, protocol, src_arch, target_arch):
+def evaluate_cross_arch(model_path_list, num_update, lr, protocol, src_arch, target_arch, updateBN):
     extract_pattern_detail = re.compile(
         ".*?DL_DET@(.*?)_(TRAIN_.*?)@model_(.*?)@data_(.*?)@epoch_(\d+)@class_(\d+)@lr_(.*?)@balance_(.*?)\.pth\.tar")
     tot_num_tasks = 20000
@@ -53,12 +53,12 @@ def evaluate_cross_arch(model_path_list, num_update, lr, protocol, src_arch, tar
             meta_task_dataset = MetaTaskDataset(tot_num_tasks, way, shot, query,
                                                 dataset, is_train=False,
                                                 load_mode=LOAD_TASK_MODE.LOAD,
-                                                protocol=protocol, no_random_way=True, adv_arch=target_arch)
+                                                protocol=protocol, no_random_way=True, adv_arch=target_arch,fetch_attack_name=False)
             data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
-            evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, num_update)
+            evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, num_update, update_BN=updateBN)
             if num_update == 0:
                 shot = 0
-            result["{}@{}-->{}".format(dataset, src_arch, target_arch)][shot] = evaluate_result
+            result["{}-->{}@{}_{}".format(src_arch, target_arch, dataset, balance)][shot] = evaluate_result
     return result
 
 def evaluate_cross_domain(model_path_list, num_update, lr, protocol, src_dataset, target_dataset):
@@ -71,6 +71,8 @@ def evaluate_cross_domain(model_path_list, num_update, lr, protocol, src_dataset
     for model_path in model_path_list:
         ma = extract_pattern_detail.match(model_path)
         dataset = ma.group(1)
+        if dataset == "ImageNet":
+            continue
         file_protocol = ma.group(2)
         if str(protocol) != file_protocol:
             continue
@@ -101,10 +103,10 @@ def evaluate_cross_domain(model_path_list, num_update, lr, protocol, src_dataset
             meta_task_dataset = MetaTaskDataset(tot_num_tasks, way, shot, query,
                                                 dataset, is_train=False,
                                                 load_mode=LOAD_TASK_MODE.LOAD,
-                                                protocol=protocol, no_random_way=True, adv_arch=adv_arch)
+                                                protocol=protocol, no_random_way=True, adv_arch=adv_arch, fetch_attack_name=False)
             data_loader = DataLoader(meta_task_dataset, batch_size=100, shuffle=False, pin_memory=True)
             evaluate_result = finetune_eval_task_accuracy(model, data_loader, lr, num_update, update_BN=True)
             if num_update == 0:
                 shot = 0
-            result["{}@{}-->{}".format(src_dataset,balance, target_dataset)][shot] = evaluate_result
+            result["{}-->{}@{}@{}".format(src_dataset, target_dataset, balance, adv_arch)][shot] = evaluate_result
     return result

@@ -1,33 +1,26 @@
-import copy
-import cv2
-import json
+import glob
+import os
+import pickle
+import random
 import re
 from collections import defaultdict
 
-from torch.utils import data
-from config import IMAGE_SIZE, DATA_ROOT, IN_CHANNELS, PY_ROOT, TASK_DATA_ROOT, IMAGE_ROTATE_DETECTOR_ANGLES, \
-    META_ATTACKER_INDEX
-import os
-import random
-
-from dataset.protocol_enum import SPLIT_DATA_PROTOCOL, LOAD_TASK_MODE
-import torch
 import numpy as np
-import glob
-import pickle
-from torchvision.transforms import RandomRotation
-from PIL import Image
+import torch
+from torch.utils import data
+
+from config import IMAGE_SIZE, IN_CHANNELS, PY_ROOT, TASK_DATA_ROOT, META_ATTACKER_INDEX
+from dataset.protocol_enum import SPLIT_DATA_PROTOCOL, LOAD_TASK_MODE
+
 
 # meta learning 总体套路: 一个batch分为n个task，每个task又分为5-way,每个way分为support和query
 class MetaTaskDataset(data.Dataset):
     """
     Data Generator capable of generating batches of data.
-    A "class" is considered a class of omniglot digits or a particular sinusoid function.
-
     """
 
     def __init__(self, num_tot_tasks, num_classes, num_support, num_query,
-                 dataset, is_train, load_mode, protocol, no_random_way, adv_arch, fetch_attack_name=True):
+                 dataset, is_train, load_mode, protocol, no_random_way, adv_arch, fetch_attack_name=False):
         """
         Args:
             num_samples_per_class: num samples to generate "per class" in one batch
@@ -87,19 +80,27 @@ class MetaTaskDataset(data.Dataset):
             trn_or_test_str = "test"
             num_tot_tasks = self.num_tot_val_batches
 
-
-        self.task_dump_txt_path = "{}/task/{}_{}/{}/{}_{}_tot_num_tasks_{}_way_{}_shot_{}_query_{}.pkl".format(PY_ROOT, protocol,
+        if self.fetch_attack_name:  # 由于审稿人要求加一个每个攻击方法分别统计
+            self.task_dump_txt_path = "{}/task/{}_{}/{}/{}_{}_tot_num_tasks_{}_way_{}_shot_{}_query_{}.pkl".format(PY_ROOT, protocol,
                                                                             dataset, adv_arch, trn_or_test_str,
                                                                             dataset, num_tot_tasks, num_classes,
                                                                             num_support, num_query)
+        else: # # 由于审稿人要求加一个每个攻击方法分别统计,但以前做好的task存放在这个路径不要删掉
+            self.task_dump_txt_path = "{}/task/no_attack_name_stats/{}_{}/{}/{}_{}_tot_num_tasks_{}_way_{}_shot_{}_query_{}.pkl".format(
+                PY_ROOT, protocol,
+                dataset, adv_arch, trn_or_test_str,
+                dataset, num_tot_tasks, num_classes,
+                num_support, num_query)
+
         self.store_data_per_task(load_mode, self.task_dump_txt_path, train=is_train)
 
 
     def store_data_per_task(self, load_mode, task_dump_txt_path, train=True):
-        if load_mode == LOAD_TASK_MODE.LOAD:
-            assert os.path.exists(task_dump_txt_path), "LOAD_TASK_MODE but do not exits task path: {} for load".format(task_dump_txt_path)
+        # if load_mode == LOAD_TASK_MODE.LOAD:
+        #     assert os.path.exists(task_dump_txt_path), "LOAD_TASK_MODE but do not exits task path: {} for load".format(task_dump_txt_path)
         self.all_tasks = defaultdict(list)
         if load_mode == LOAD_TASK_MODE.LOAD and os.path.exists(task_dump_txt_path):
+        # if os.path.exists(task_dump_txt_path):
             with open(task_dump_txt_path, "rb") as file_obj:
                 self.all_tasks = pickle.load(file_obj)
             return
@@ -229,7 +230,7 @@ class MetaTaskDataset(data.Dataset):
                         ma = extract_gt_label_pattern.match(whole_path)
                         img_gt_label = int(ma.group(1))
                         adv_label = int(ma.group(2))
-                        adversary = META_ATTACKER_INDEX[adv_label - 1]
+                        adversary = META_ATTACKER_INDEX[adv_label - 1] # clean = 1,所以从1 开始 -1，则从0开始
                         if adv_label != 1:
                             adv_label = 0  # real image == 1, adv image == 0
                         way_label = i
@@ -242,10 +243,12 @@ class MetaTaskDataset(data.Dataset):
 
         train_files = [data_json for data_json in task_data_list if data_json["type"] == "support"] # 2-way, N-shot
         test_files = [data_json for data_json in task_data_list if data_json["type"] == "query"]
-        adversary_list = list(filter(lambda data_json: data_json["adv_label"] == 0, task_data_list))
-        adversary_set = set(e["adversary"] for e in adversary_list)
-        assert len(adversary_set) == 1, len(adversary_set)
-        adversary_index = META_ATTACKER_INDEX.index(list(adversary_set)[0])
+
+        if self.fetch_attack_name:
+            adversary_list = list(filter(lambda data_json: data_json["adv_label"] == 0, task_data_list)) # adv_label = 0表示是对抗样本
+            adversary_set = set(e["adversary"] for e in adversary_list)  # adversary存储的是字符串
+            assert len(adversary_set) == 1, len(adversary_set)
+            adversary_index = META_ATTACKER_INDEX.index(list(adversary_set)[0])
 
         try:
             task_positive_label = train_files[0]["pos_label"]

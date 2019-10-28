@@ -63,7 +63,7 @@ def evaluate_whitebox_attack(args):
                                                    CLASS_NUM[dataset])
             image_transform = ImageTransformTorch(dataset, [5, 15])
             layer_number = 3 if dataset in ["CIFAR-10", "CIFAR-100", "SVHN"] else 2
-            model = Detector(dataset, img_classifier_network, CLASS_NUM[dataset],image_transform, layer_number, False,num_classes=2)
+            model = Detector(dataset, img_classifier_network, CLASS_NUM[dataset],image_transform, layer_number,num_classes=2)
             model.load_state_dict(checkpoint['state_dict'])
             model.cuda()
             print("=> loaded checkpoint '{}' (epoch {})"

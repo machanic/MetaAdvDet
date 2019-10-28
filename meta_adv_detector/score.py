@@ -24,16 +24,16 @@ def count_correct(pred, target):
 
 def forward_pass(net, in_, target, weights=None):
     ''' forward in_ through the net, return loss and output '''
-    input_var = in_.cuda(async=True)
-    target_var = target.cuda(async=True)
+    input_var = in_.cuda()
+    target_var = target.cuda()
     out = net.net_forward(input_var, weights)
     loss = net.loss_fn(out, target_var)
     return loss, out
 
 def forward_pass_rotate_random_angle(net, in_, target):
     ''' forward in_ through the net, return loss and output '''
-    input_var = in_.cuda(async=True)
-    target_var = target.cuda(async=True)
+    input_var = in_.cuda()
+    target_var = target.cuda()
     out = net.net_forward(input_var, True)
     loss = net.loss_fn(out, target_var)
     return loss, out
@@ -53,11 +53,15 @@ def evaluate_two_way(net, x, target):
     x = x.cuda()
     target = target.cuda()
     with torch.no_grad():
-        _, out = forward_pass(net, x, target)
+        loss, out = forward_pass(net, x, target)
     predict = np.argmax(out.detach().cpu().numpy(), axis=1)
     target = target.detach().cpu().numpy()
     F1 = f1_score(target, predict)
     accuracy = accuracy_score(target, predict)
+    del loss
+    del out
+    del x
+    # torch.cuda.empty_cache()
     return accuracy, F1
 
 def evaluate(net, in_, target_Nway, target_positive, weights=None, use_positive_position=True):

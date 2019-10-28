@@ -95,7 +95,9 @@ class ResNet(nn.Module):
 
     def __init__(self, block, layers, in_channels=3, num_classes=15,  zero_init_residual=False):
         super(ResNet, self).__init__()
+        self.loss_fn = nn.CrossEntropyLoss()
         self.inplanes = 64
+        self.in_channels = in_channels
         self.conv1 = nn.Conv2d(in_channels, 64, kernel_size=7, stride=2, padding=3,
                                bias=False)
         self.bn1 = nn.BatchNorm2d(64)
@@ -127,6 +129,7 @@ class ResNet(nn.Module):
                     nn.init.constant_(m.bn3.weight, 0)
                 elif isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)
+
     def copy_weights(self, net):
         ''' Set this module's weights to be the same as those of 'net' '''
         for m_from, m_to in zip(net.modules(), self.modules()):
@@ -168,6 +171,10 @@ class ResNet(nn.Module):
         x = self.fc(x)
 
         return x
+
+    def net_forward(self, x, weights=None):
+        x = x.view(-1, self.in_channels,224,224)  # FIXME!!
+        return self.forward(x)
 
 def resnet8(num_classes, **kwards):
     model = ResNet(BasicBlock, [1,1,1], num_classes=num_classes, **kwards)

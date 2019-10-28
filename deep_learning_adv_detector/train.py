@@ -1,13 +1,14 @@
 import sys
 
 sys.path.append("/home1/machen/adv_detection_meta_learning")
-from deep_learning_adv_detector.evaluation.cross_domain_evaluation import evaluate_cross_domain, evaluate_cross_arch
+from deep_learning_adv_detector.evaluation.cross_domain_and_arch_evaluation import evaluate_cross_domain, evaluate_cross_arch
 from deep_learning_adv_detector.evaluation.finetune_evaluation import evaluate_finetune
 from deep_learning_adv_detector.evaluation.shots_evaluation import evaluate_shots
 from collections import defaultdict
 from networks.conv3 import Conv3
 from meta_adv_detector.tensorboard_helper import TensorBoardWriter
-from dataset.deep_learning_adversary_dataset import AdversaryDataset
+from dataset.DNN_adversary_dataset import AdversaryDataset
+from dataset.DNN_adversary_random_access_npy_dataset import AdversaryRandomAccessNpyDataset
 import argparse
 import os
 import random
@@ -23,7 +24,7 @@ import torch.utils.data.distributed
 import torchvision.models as models
 from config import IMAGE_SIZE, IMAGE_DATA_ROOT
 import config
-
+from networks.resnet import resnet10, resnet18
 import json
 from config import IN_CHANNELS, PY_ROOT
 from dataset.protocol_enum import SPLIT_DATA_PROTOCOL, LOAD_TASK_MODE
@@ -119,8 +120,9 @@ def main():
         elif args.study_subject == "shots_eval":
             result = evaluate_shots(model_file_list, args.num_updates, args.lr, args.protocol)
         elif args.study_subject == "cross_arch":
+            updateBN = False
             result = evaluate_cross_arch(model_file_list, args.num_updates, args.lr, args.protocol,args.cross_arch_source,
-                                         args.cross_arch_target)
+                                         args.cross_arch_target, updateBN)
         elif args.study_subject == "zero_shot":
             result =evaluate_zero_shot(model_file_list, args.lr, args.protocol, args)
         elif args.study_subject == "speed_test":
@@ -131,18 +133,17 @@ def main():
             for attack_name in attacks:
                 evaluate_whitebox(args.dataset, "conv3", "conv3", "DNN",attack_name, args.num_updates, args.lr,
                                   args.protocol, LOAD_TASK_MODE.NO_LOAD, result)
-
         file_name = '{}/train_pytorch_model/DL_DET/cross_adv_group_{}_using_{}_protocol.json'.format(PY_ROOT,args.study_subject, args.protocol)
         if args.study_subject == "cross_domain":
             file_name = '{}/train_pytorch_model/DL_DET/evaluate_{}_{}--{}_using_{}_protocol.json'.format(PY_ROOT,
                                                                                                   args.study_subject,args.cross_domain_source, args.cross_domain_target,
                                                                                                   args.protocol)
         elif args.study_subject == "cross_arch":
-            file_name = '{}/train_pytorch_model/DL_DET/evaluate_{}_{}--{}_using_{}_protocol.json'.format(PY_ROOT,
+            file_name = '{}/train_pytorch_model/DL_DET/evaluate_{}_{}--{}_using_{}_protocol_updateBN_{}.json'.format(PY_ROOT,
                                                                                                          args.study_subject,
                                                                                                          args.cross_arch_source,
                                                                                                          args.cross_arch_target,
-                                                                                                         args.protocol)
+                                                                                                         args.protocol, updateBN)
         elif args.study_subject == "white_box":
             file_name = '{}/train_pytorch_model/white_box_model/white_box_UPDATEBN_DNN_{}_using_{}_protocol.json'.format(PY_ROOT,
                                                                                                          args.dataset,
@@ -176,9 +177,19 @@ def main_train_worker(args, model_path, META_ATTACKER_PART_I=None,META_ATTACKER_
     os.environ['CUDA_VISIBLE_DEVICES'] = gpu
     print("will save to {}".format(model_path))
     global best_acc1
-    model = Conv3(IN_CHANNELS[args.dataset],IMAGE_SIZE[args.dataset], 2)
+    if args.arch == "conv3":
+        model = Conv3(IN_CHANNELS[args.dataset],IMAGE_SIZE[args.dataset], 2)
+    elif args.arch == "resnet10":
+        model = resnet10(2, in_channels=IN_CHANNELS[args.dataset], pretrained=False)
+    elif args.arch == "resnet18":
+        model = resnet18(2, in_channels=IN_CHANNELS[args.dataset], pretrained=False)
     model = model.cuda()
-    train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.adv_arch),
+    if args.dataset == "ImageNet":
+        train_dataset = AdversaryRandomAccessNpyDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.adv_arch),
+                                                        True, args.protocol, META_ATTACKER_PART_I,META_ATTACKER_PART_II,
+                                                        args.balance, args.dataset)
+    else:
+        train_dataset = AdversaryDataset(IMAGE_DATA_ROOT[args.dataset] + "/adversarial_images/{}".format(args.adv_arch),
                                      True, args.protocol, META_ATTACKER_PART_I,META_ATTACKER_PART_II, args.balance)
 
     # val_dataset = MetaTaskDataset(20000, 2, 1, 15,

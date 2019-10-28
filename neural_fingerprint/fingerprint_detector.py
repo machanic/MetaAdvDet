@@ -18,8 +18,8 @@ class NeuralFingerprintDetector(object):
         self.dataset = dataset
         self.model = model
         self.num_class = num_class
-        self.dx_path = out_fp_dxdy_dir + '/fp_inputs_dx@num_dx_{}@{}.pkl'.format(num_dx, dataset)
-        self.dy_path = out_fp_dxdy_dir + '/fp_outputs_dy@num_dx_{}@{}.pkl'.format(num_dx, dataset)
+        self.dx_path = out_fp_dxdy_dir + '/fp_inputs_dx@num_dx_{}_eps_{}@{}.pkl'.format(num_dx, eps, dataset)
+        self.dy_path = out_fp_dxdy_dir + '/fp_outputs_dy@num_dx_{}_num_class_{}@{}.pkl'.format(num_dx, num_class, dataset)
         self.num_dx = num_dx
         if os.path.exists(self.dx_path) and os.path.exists(self.dy_path):
             print("loading dx and dy from {} and {}".format(self.dx_path, self.dy_path))
@@ -172,9 +172,6 @@ class NeuralFingerprintDetector(object):
                   "fingerprint-loss (argmax)": argmax_acc,
                   }
         return result
-
-
-
 
 
     def model_with_fingerprint(self, model, x, fp):
@@ -340,7 +337,7 @@ class NeuralFingerprintDetector(object):
             support_images = support_images.cuda()
             query_images = query_images.cuda()
             for task_idx in range(support_images.size(0)):
-                print("evaluate_accuracy task {}".format(task_idx))
+
                 clean_support_index = np.where(support_binary_labels[task_idx] == 1)[0]
                 clean_imgs = support_images[task_idx][clean_support_index]
                 clean_labels = support_gt_labels[task_idx][clean_support_index]  # support label 需要传入干净图 的真正label，而不是0/1
@@ -398,6 +395,7 @@ class NeuralFingerprintDetector(object):
                 stats_per_tau.clear()
                 for thresh in reject_thresholds:
                     stats_per_tau[thresh] = Stats(tau=thresh, name=ds_name, ds_name=ds_name)
+                print("evaluate_accuracy task {}, F1:{}".format(task_idx, best_F1))
         F1 = np.mean(all_F1_scores)
         tau = np.mean(all_tau)
         for adversary, query_F1_score_list in attacker_stats.items():
