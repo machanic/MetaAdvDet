@@ -10,7 +10,6 @@ import random
 import time
 import warnings
 from networks.resnet import resnet10, resnet18
-from networks.shallow_convs import FourConvs
 import torch
 import torch.nn as nn
 import torch.nn.parallel

@@ -132,8 +132,8 @@ def evaluate_accuracy(net, in_, target_positive, weights=None):
 
 
 def build_network(dataset, arch, model_path):
-    if dataset!="ImageNet":
-        assert os.path.exists(model_path), "{} not exists!".format(model_path)
+    # if dataset!="ImageNet":
+    #     assert os.path.exists(model_path), "{} not exists!".format(model_path)
 
     if arch in models.__dict__:
         print("=> using pre-trained model '{}'".format(arch))
