@@ -7,6 +7,10 @@ DOI: 10.1145/3343031.3350887
 
 ACM MM published version: https://dl.acm.org/doi/10.1145/3343031.3350887
 
+<p align="center"><img src="paper_figures/fig1.png"></p>
+
+The procedure of MetaAdvDet training in one mini-batch. The approach consists of a double-network framework: M and T. M is the task-dedicated network which focuses on learning each task. It copies parameters from master network M at the beginning, and then trains on the support set. After a couple of iterations (inner update step), T converges and computes the gradient $G_i$ on the query set of task i. M accumulates the gradients to update its parameters which are prepared for the next mini-batch learning. The learned
+M can be used to detect new attacks with limited new samples. More details can be found in Sec. 3.2.
 # Citation
 We kindly ask anybody who uses this code cite the following bibtex：
 ```
@@ -105,12 +109,28 @@ or
 `python meta_adv_detector/train.py --arch conv3 --dataset CIFAR-10 --split_protocol TRAIN_ALL_TEST_ALL --load_task_mode LOAD --no_random_way --evaluate --study_subject cross_arch --cross_arch_source resnet10 --cross_arch_target resnet18`
 
 # Experiment Results
+<p align="center"><img src="paper_figures/Tab9.png"></p>
 
-[The experiment results of cross-adversary benchmark](https://github.com/machanic/MetaAdvDet/tree/master/paper_figures/Tab9.png)
-[The results of typical adversaries in cross-adversary benchmark](https://github.com/machanic/MetaAdvDet/tree/master/paper_figures/Tab10.png)
-[The experiment results of cross-domain benchmark](https://github.com/machanic/MetaAdvDet/tree/master/paper_figures/Tab11.png)
-[The experiment results of cross-arch benchmark](https://github.com/machanic/MetaAdvDet/tree/master/paper_figures/Tab12.png)
-[The experiment results of white-box attack benchmark](https://github.com/machanic/MetaAdvDet/tree/master/paper_figures/Tab13.png)
-[The inference speed test results](https://github.com/machanic/MetaAdvDet/tree/master/paper_figures/Tab14.png)
+<center>The experiment results of cross-adversary benchmark.</center>
+
+<p align="center"><img src="paper_figures/Tab10.png"></p>
+
+<center>The results of typical adversaries in cross-adversary benchmark.</center>
+
+<p align="center"><img src="paper_figures/Tab11.png"></p>
+
+<center>The results of typical adversaries in cross-domain benchmark.</center>
+
+<p align="center"><img src="paper_figures/Tab12.png"></p>
+
+<center>The results of typical adversaries in cross-arch benchmark.</center>
+
+<p align="center"><img src="paper_figures/Tab13.png" width="700"></p>
+
+<center>The experiment results of white-box attack benchmark.</center>
+
+<p align="center"><img src="paper_figures/Tab14.png" ></p>
+
+<center>The inference speed test results.</center>
 
 Additional experiment results are listed in Sec. 5 of the paper.
