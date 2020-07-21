@@ -105,4 +105,12 @@ or
 `python meta_adv_detector/train.py --arch conv3 --dataset CIFAR-10 --split_protocol TRAIN_ALL_TEST_ALL --load_task_mode LOAD --no_random_way --evaluate --study_subject cross_arch --cross_arch_source resnet10 --cross_arch_target resnet18`
 
 # Experiment Results
-The experiment results are listed in Sec. 5 of the paper.
+
+[The experiment results of cross-adversary benchmark](https://github.com/machanic/MetaAdvDet/tree/master/paper_figures/Tab9.png)
+[The results of typical adversaries in cross-adversary benchmark](https://github.com/machanic/MetaAdvDet/tree/master/paper_figures/Tab10.png)
+[The experiment results of cross-domain benchmark](https://github.com/machanic/MetaAdvDet/tree/master/paper_figures/Tab11.png)
+[The experiment results of cross-arch benchmark](https://github.com/machanic/MetaAdvDet/tree/master/paper_figures/Tab12.png)
+[The experiment results of white-box attack benchmark](https://github.com/machanic/MetaAdvDet/tree/master/paper_figures/Tab13.png)
+[The inference speed test results](https://github.com/machanic/MetaAdvDet/tree/master/paper_figures/Tab14.png)
+
+Additional experiment results are listed in Sec. 5 of the paper.
