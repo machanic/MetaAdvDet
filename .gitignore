@@ -28,8 +28,6 @@ venv/
 data
 *.jpg
 *.txt
-*.png
-*.jpeg
 *.mp4
 *.mat
 *.so

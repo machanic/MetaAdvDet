@@ -9,13 +9,13 @@ import torch
 from config import PY_ROOT
 from dataset.protocol_enum import SPLIT_DATA_PROTOCOL
 from evaluation_toolkit.evaluation import finetune_eval_task_accuracy
-from lookahead_meta_adv_detector.lookahead_meta_adv_det import MetaLearner
+from meta_adv_detector.meta_adv_det import MetaLearner
 
 
 def meta_cross_domain_evaluate(args):
     extract_pattern = re.compile(
-        ".*/LookaheadMAML@(.*?)_(.*?)@model_(.*?)@data_(.*?)@epoch_(\d+)@meta_batch_size_(\d+)@way_(\d+)@shot_(\d+)@num_query_(\d+)@num_updates_(\d+)@alpha_(.*?)@inner_lr_(.*?)@fixed_way_(.*?)@.*")
-    extract_param_prefix = re.compile(".*/LookaheadMAML@(.*?)\.pth.tar")
+        ".*/MAML@(.*?)_(.*?)@model_(.*?)@data_(.*?)@epoch_(\d+)@meta_batch_size_(\d+)@way_(\d+)@shot_(\d+)@num_query_(\d+)@num_updates_(\d+)@alpha_(.*?)@inner_lr_(.*?)@fixed_way_(.*?)@.*")
+    extract_param_prefix = re.compile(".*/MAML@(.*?)\.pth.tar")
     report_result = defaultdict(dict)
     str2bool = lambda v: v.lower() in ("yes", "true", "t", "1")
     for shot in [1, 5]:
