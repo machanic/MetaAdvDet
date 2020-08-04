@@ -10,7 +10,7 @@ ACM MM published version: https://dl.acm.org/doi/10.1145/3343031.3350887
 <p align="center"><img src="paper_figures/fig1.png"></p>
 
 The procedure of MetaAdvDet training in one mini-batch. The approach consists of a double-network framework: M and T. M is the task-dedicated network which focuses on learning each task. It copies parameters from master network M at the beginning, and then trains on the support set. After a couple of iterations (inner update step), T converges and computes the gradient $G_i$ on the query set of task i. M accumulates the gradients to update its parameters which are prepared for the next mini-batch learning. The learned
-M can be used to detect new attacks with limited new samples. More details can be found in Sec. 3.2.
+M can be used to detect new attacks with limited new samples. More details can be found in Sec. 3.2 of the paper.
 # Citation
 We kindly ask anybody who uses this code cite the following bibtex：
 ```
@@ -125,7 +125,7 @@ or
 
 <center>The results of typical adversaries in cross-arch benchmark.</center>
 
-<p align="center"><img src="paper_figures/Tab13.png" width="700"></p>
+<p align="center"><img src="paper_figures/Tab13.png"></p>
 
 <center>The experiment results of white-box attack benchmark.</center>
 
@@ -134,3 +134,6 @@ or
 <center>The inference speed test results.</center>
 
 Additional experiment results are listed in Sec. 5 of the paper.
+
+# Download Trained Model Files
+I have uploaded all the trained model files into the cloud disk drive. If you want to download them, please contact <sharpstill@163.com>.
