@@ -1,5 +1,6 @@
 # MetaAdvDet
 The official implementation of paper "MetaAdvDet: Towards Robust Detection of Evolving Adversarial Attacks", which is published on Proceedings of the 27th ACM International Conference on Multimedia (ACM MM 19).
+
 By Chen Ma, Chenxu Zhao, Hailin Shi, Li Chen, Junhai Yong and Dan Zeng.
 
 [[arXiv Paper]](https://arxiv.org/abs/1908.02199) [[ACM MM published version]](https://dl.acm.org/doi/10.1145/3343031.3350887) [[Slides]](https://raw.githubusercontent.com/machanic/MetaAdvDet/master/paper_figures/MetaAdvDet_Slides.pdf) [[Poster]](https://raw.githubusercontent.com/machanic/MetaAdvDet/master/paper_figures/MetaAdvDet_poster.pdf)
