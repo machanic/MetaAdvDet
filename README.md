@@ -134,4 +134,4 @@ or
 Additional experiment results are listed in Sec. 5 of the paper.
 
 # Download Trained Model Files
-I have uploaded all the trained model files into the cloud disk drive. If you want to download them, please contact <sharpstill@163.com>.
+I have uploaded all the trained model files into the cloud disk drive, which is located at https://cloud.tsinghua.edu.cn/d/e14a4d2b47294e8c8e30/
