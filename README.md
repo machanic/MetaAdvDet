@@ -44,7 +44,9 @@ Requirement: Pytorch 0.4.0 or above, torchvision 1.3.0 or above
 ## step 1. Generate the training data and organize them to the format of multi-tasks.
  (1) `git clone https://github.com/machanic/cleverhans_adversarial_example_gen`
  
- Then, `python cleverhans/generate_adv_script/generate_adversarial_images_untargeted.py --attack FGSM --dataset CIFAR-10 --arch conv4` to generate the adversarial examples.
+ Then, `python cleverhans/generate_adv_script/generate_adversarial_images_script.py --attack FGSM --dataset CIFAR-10 --arch conv4` to generate the FGSM adversarial examples.
+ 
+ To generate different types of adversarial examples, you can pass different `--attack`, and the available adversaries are listed in `META_ATTACKER_INDEX` list of `cleverhans/generate_adv_script/config.py`, which are `["clean", "FGSM", "MI_FGSM_L_infinity", "BIM_L_infinity", "PGD_L_infinity", "SPSA", "CW_L2", "deep_fool_L2", "newton_fool", "jsma","EAD","spatial_transform","VAT","max_confidence", "semantic", "LBFGS"]`.
  
  (2) Organize all adversarial examples of different attacks into the format of multi-tasks.
  
@@ -134,4 +136,4 @@ or
 Additional experiment results are listed in Sec. 5 of the paper.
 
 # Download Trained Model Files
-I have uploaded all the trained model files into the cloud disk drive, which is located at https://cloud.tsinghua.edu.cn/d/e14a4d2b47294e8c8e30/
+I have uploaded all the trained model files and experimental results data files into the cloud disk drive, which is located at [Tsinghua Cloud Disk](https://cloud.tsinghua.edu.cn/d/d98471b4d050407c9a7d/).
